@@ -9,3 +9,5 @@ requests and on `main`:
 ```sh
 python -m pytest
 ```
+
+本仓库用于 Orbi beta 端到端测试
