@@ -18,8 +18,8 @@ ISSUE_TEMPLATE = REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "user-outcome.md"
 # itself promises to the author.
 ISSUE_TEMPLATE_FRONT_MATTER_KEYS = ("name", "about")
 
-# Issue #11 appends this exact line as the README's final line.
-README_LAST_LINE = "回归测试 2026-09-28"
+# Issue #15 appends this exact line as the README's final line.
+README_LAST_LINE = "回归测试 v0.6.82"
 ISSUE_TEMPLATE_SECTIONS = (
     "## User outcome",
     "## Preconditions",
