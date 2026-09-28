@@ -17,6 +17,9 @@ ISSUE_TEMPLATE = REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "user-outcome.md"
 # its YAML front matter; the body sections are the ones the template
 # itself promises to the author.
 ISSUE_TEMPLATE_FRONT_MATTER_KEYS = ("name", "about")
+
+# Issue #11 appends this exact line as the README's final line.
+README_LAST_LINE = "回归测试 2026-09-28"
 ISSUE_TEMPLATE_SECTIONS = (
     "## User outcome",
     "## Preconditions",
@@ -39,6 +42,14 @@ def _front_matter(text: str) -> str:
 
 def test_readme_is_not_empty():
     assert _read(README).strip(), "README.md is empty"
+
+
+def test_readme_ends_with_regression_line():
+    lines = [line for line in _read(README).splitlines() if line.strip()]
+    assert lines[-1] == README_LAST_LINE, (
+        f"the README must end with the {README_LAST_LINE!r} line, "
+        f"got {lines[-1]!r}"
+    )
 
 
 def test_issue_template_front_matter_has_required_keys():
