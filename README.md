@@ -10,6 +10,23 @@ requests and on `main`:
 python -m pytest
 ```
 
+## Running the content checks locally
+
+The checks need Python 3 and `pytest`, and the commands below run the same
+checks as CI. From the repository root:
+
+```sh
+python -m pip install pytest
+python -m pytest
+```
+
+`python -m pytest` runs `tests/test_repository_content.py`, whose four checks
+must all pass (`4 passed` in the pytest summary).
+
+If `pytest` is not installed, `python -m pytest` fails with
+`No module named pytest`; install it with `python -m pip install pytest` and
+run `python -m pytest` again.
+
 本仓库用于 Orbi beta 端到端测试
 
 最后更新于 2026-09-28
