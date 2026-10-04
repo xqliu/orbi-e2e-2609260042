@@ -3,6 +3,11 @@ Orbi beta e2e from signup (2026-09-26)
 
 本仓库是 Orbi beta 的端到端（e2e）测试仓库：它没有应用代码，产物是 README 与 Issue 模板，并由 CI 在每个 pull request 上运行内容检查。
 
+## 请勿提交 PR
+
+本仓库是 Orbi beta 的端到端（e2e）测试仓库，只服务于 Orbi 自身的自动化回归验证。
+它不是应用项目，也不接受外部贡献：请勿向本仓库提交 pull request（PR）。
+
 ## Tests
 
 `.github/workflows/ci.yml` runs the repository content checks on pull
