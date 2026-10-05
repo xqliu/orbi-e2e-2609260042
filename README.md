@@ -17,6 +17,8 @@ requests and on `main`:
 python -m pytest
 ```
 
+CI 会在每个 PR 上运行这些检查。
+
 ## Running the content checks locally
 
 The checks need Python 3 and `pytest`, and the commands below run the same
