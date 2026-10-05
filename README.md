@@ -52,6 +52,31 @@ If `pytest` is not installed, `python -m pytest` fails with
 `No module named pytest`; install it with `python -m pip install pytest` and
 run `python -m pytest` again.
 
+## FAQ
+
+### Q：这个仓库是什么？为什么不接受 PR？
+
+这是 Orbi beta 的端到端（e2e）测试仓库，没有应用代码，产物是 README 与
+Issue 模板。它只服务于 Orbi 自身的自动化回归验证，不是应用项目，也不接受
+外部贡献，因此请勿提交 pull request（PR）；要贡献请改为通过 Issue 提出。
+
+### Q：怎么在本地运行内容检查？
+
+需要 Python 3 与 `pytest`，在仓库根目录执行与 CI 相同的命令：
+
+```sh
+python -m pip install pytest
+python -m pytest
+```
+
+`python -m pytest` 会运行 `tests/test_repository_content.py`，其中四条检查
+必须全部通过（pytest 汇总输出为 `4 passed`）。
+
+### Q：运行 `python -m pytest` 报 `No module named pytest` 怎么办？
+
+说明当前 Python 环境没有安装 `pytest`。用 `python -m pip install pytest`
+安装后，重新运行 `python -m pytest` 即可。
+
 本仓库用于 Orbi beta 端到端测试
 
 最后更新于 2026-09-28
