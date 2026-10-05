@@ -5,6 +5,9 @@ title: ""
 labels: ""
 ---
 
+## 优先级
+[高 / 中 / 低]（三档，`高` 最高；可选填，留空表示未定）
+
 ## User outcome
 When [user/context], the user should [observable result].
 

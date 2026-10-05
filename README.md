@@ -17,7 +17,8 @@ Orbi beta e2e from signup (2026-09-26)
 
 1. 在本仓库的 Issues 中新建一个 Issue。
 2. 选择 `User outcome` 模板（模板文件为 `.github/ISSUE_TEMPLATE/user-outcome.md`），
-   并按模板填写四节：`## User outcome`（用户可见的结果）、`## Preconditions`
+   先在正文开头的 `## 优先级` 里写明优先级（`高` / `中` / `低` 三档，`高` 最高，
+   可留空），再按模板填写四节：`## User outcome`（用户可见的结果）、`## Preconditions`
    （前置条件与真实入口命令）、`## Acceptance`（成功路径与失败路径）、
    `## Evidence`（真实入口与可复现的证据）。
 3. 维护者据此实现变更，并在 CI 检查通过后合并到 `main`。
