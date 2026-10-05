@@ -38,12 +38,23 @@ CI 会在每个 PR 上运行这些检查。
 ## Running the content checks locally
 
 The checks need Python 3 and `pytest`, and the commands below run the same
-checks as CI. From the repository root:
+checks as CI. Run them in this order: get the repository, confirm Python 3,
+install `pytest`, run the checks.
 
 ```sh
+git clone https://github.com/xqliu/orbi-e2e-2609260042.git
+cd orbi-e2e-2609260042
+python --version
 python -m pip install pytest
 python -m pytest
 ```
+
+`python --version` must print Python 3 (for example `Python 3.12.3`); if it
+prints a Python 2 version such as `Python 2.7.18`, or the command fails with
+`command not found`, this machine has no Python 3: install it from
+https://www.python.org/downloads/ (or with your system package manager), then
+continue with `python -m pip install pytest` and run `python -m pytest` until
+the summary says `4 passed`.
 
 `python -m pytest` runs `tests/test_repository_content.py`, whose four checks
 must all pass (`4 passed` in the pytest summary).
