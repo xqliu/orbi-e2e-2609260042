@@ -20,6 +20,8 @@ requests and on `main`:
 python -m pytest
 ```
 
+本地运行前先装 pytest（`python -m pip install pytest`）。
+
 CI 会在每个 PR 上运行这些检查。
 
 ## Running the content checks locally
