@@ -15,6 +15,12 @@ When [user/context], the user should [observable result].
 - User has [installation/configuration/provider/access prerequisite].
 - User runs: `[real command or interaction]`.
 
+## Steps to reproduce
+The exact steps anyone can follow to see the problem:
+1. [Setup or entry action, e.g. `[command]`].
+2. [Action that triggers the problem].
+3. [Result that shows the problem].
+
 ## Acceptance
 ### Success path
 - System action: [what the system actually does].
