@@ -23,6 +23,7 @@ README_LAST_LINE = "Wake test 10-05"
 ISSUE_TEMPLATE_SECTIONS = (
     "## User outcome",
     "## Preconditions",
+    "## Steps to reproduce",
     "## Acceptance",
     "## Evidence",
 )
