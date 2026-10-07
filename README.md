@@ -95,4 +95,5 @@ python -m pytest
 回归测试 2026-09-28
 回归测试 v0.6.82
 回归测试 v0.6.106
+Copyright © 2026 xqliu
 Wake test 10-05
