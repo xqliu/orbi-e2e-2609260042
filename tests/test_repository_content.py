@@ -19,7 +19,8 @@ ISSUE_TEMPLATE = REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "user-outcome.md"
 ISSUE_TEMPLATE_FRONT_MATTER_KEYS = ("name", "about")
 
 # Issue #39 appends this exact line as the README's final line.
-README_LAST_LINE = "Wake test 10-05"
+# Issue #55 appends this exact line as the new README final line.
+README_LAST_LINE = "本仓库用于 Orbi Cloud 每次发版前的新用户全流程验收（v0.7.12，2026-10-07）"
 ISSUE_TEMPLATE_SECTIONS = (
     "## User outcome",
     "## Preconditions",
