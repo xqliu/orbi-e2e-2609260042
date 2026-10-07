@@ -97,3 +97,4 @@ python -m pytest
 回归测试 v0.6.106
 Copyright © 2026 xqliu
 Wake test 10-05
+本仓库用于 Orbi Cloud 每次发版前的新用户全流程验收（v0.7.12，2026-10-07）
