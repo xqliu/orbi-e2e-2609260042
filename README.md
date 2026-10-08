@@ -54,12 +54,13 @@ prints a Python 2 version such as `Python 2.7.18`, or the command fails with
 `command not found`, this machine has no Python 3: install it from
 https://www.python.org/downloads/ (or with your system package manager), then
 continue with `python -m pip install pytest stripe` and run `python -m pytest`
-until the summary reports `0 failed`.
+until the summary reports that every test passed (for example
+`20 passed in 5.83s`, with no `failed`).
 
 `python -m pytest` runs the repository content checks
 (`tests/test_repository_content.py`) and the Stripe payment tests
-(`tests/test_stripe_payments.py`); every test must pass (`0 failed` in the
-pytest summary).
+(`tests/test_stripe_payments.py`); every test must pass (the pytest summary
+must report no `failed`).
 
 If `pytest` or `stripe` is not installed, `python -m pytest` fails with
 `No module named pytest` (or `No module named stripe`); install both with
@@ -96,13 +97,15 @@ If `pytest` or `stripe` is not installed, `python -m pytest` fails with
 
 ### Q：这个仓库是什么？为什么不接受 PR？
 
-这是 Orbi beta 的端到端（e2e）测试仓库，没有应用代码，产物是 README 与
-Issue 模板。它只服务于 Orbi 自身的自动化回归验证，不是应用项目，也不接受
-外部贡献，因此请勿提交 pull request（PR）；要贡献请改为通过 Issue 提出。
+这是 Orbi beta 的端到端（e2e）测试仓库，没有应用服务，产物是 README、
+Issue 模板与一个最小的 Stripe 付款入口。它只服务于 Orbi 自身的自动化回归
+验证，不是应用项目，也不接受外部贡献，因此请勿提交 pull request（PR）；
+要贡献请改为通过 Issue 提出。
 
 ### Q：怎么在本地运行内容检查？
 
-需要 Python 3 与 `pytest`，在仓库根目录执行与 CI 相同的命令：
+需要 Python 3、`pytest` 与官方 `stripe` SDK，在仓库根目录执行与 CI 相同的
+命令：
 
 ```sh
 python -m pip install pytest stripe
@@ -111,7 +114,7 @@ python -m pytest
 
 `python -m pytest` 会运行仓库内容检查（`tests/test_repository_content.py`）与
 Stripe 付款测试（`tests/test_stripe_payments.py`），全部必须通过（pytest 汇总里
-`0 failed`）。
+没有 `failed`）。
 
 ### Q：运行 `python -m pytest` 报 `No module named pytest` 怎么办？
 

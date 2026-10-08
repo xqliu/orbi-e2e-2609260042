@@ -65,11 +65,18 @@ jobs:
       - name: Install Stripe SDK
         run: python -m pip install --quiet stripe
       - name: Charge the pre-created payment method with the live key
+        # The dispatch inputs reach the shell through step env vars, never by
+        # being substituted into the `run` script, so an input value cannot
+        # inject shell code into the job that holds the live key.
         env:
           STRIPE_LIVE_SECRET_KEY: ${{ secrets.STRIPE_LIVE_SECRET_KEY }}
+          PAYMENT_METHOD: ${{ inputs.payment_method }}
+          CUSTOMER: ${{ inputs.customer }}
+          AMOUNT: ${{ inputs.amount }}
+          CURRENCY: ${{ inputs.currency }}
         run: |
           python -m stripe_payments verify \
-            --payment-method "${{ inputs.payment_method }}" \
-            --customer "${{ inputs.customer }}" \
-            --amount "${{ inputs.amount }}" \
-            --currency "${{ inputs.currency }}"
+            --payment-method "$PAYMENT_METHOD" \
+            --customer "$CUSTOMER" \
+            --amount "$AMOUNT" \
+            --currency "$CURRENCY"
