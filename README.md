@@ -23,6 +23,9 @@ Orbi beta e2e from signup (2026-09-26)
    可留空），再按模板填写五节：`## User outcome`（用户可见的结果）、`## Preconditions`
    （前置条件与真实入口命令）、`## Steps to reproduce`（可照做的复现步骤）、
    `## Acceptance`（成功路径与失败路径）、`## Evidence`（真实入口与可复现的证据）。
+   要提功能建议时，选择 `功能建议` 模板（模板文件为
+   `.github/ISSUE_TEMPLATE/feature-request.md`），填写 `## 想解决的问题` 与
+   `## 期望的效果` 两节。
 3. 维护者据此实现变更，并在 CI 检查通过后合并到 `main`。
 
 ## Tests
