@@ -1,5 +1,7 @@
 # orbi-e2e-2609260042
 
+这是 Orbi beta 的端到端测试仓库
+
 ![CI](https://github.com/xqliu/orbi-e2e-2609260042/actions/workflows/ci.yml/badge.svg)
 
 Orbi beta e2e from signup (2026-09-26)
