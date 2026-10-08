@@ -12,6 +12,7 @@
 - 新增更新日志 `CHANGELOG.md`，采用 Keep a Changelog 格式。
 - 在 `User outcome` Issue 模板中新增 `## Steps to reproduce` 小节，
   供提交者填写可照做的复现步骤。
+- 在 README 中新增联系邮箱 `support@orbi.build`。
 
 ## [v0.6.106] - 2026-09-28
 
