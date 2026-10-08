@@ -17,6 +17,9 @@
   Checkout 托管结账页，`verify` 子命令用预先创建的支付方式完成一笔真实扣款。
 - `CI` 工作流新增手动触发、需人工批准 `stripe-live` 环境的
   `live payment verification` 任务。
+- `CI` 工作流在 `push`（`main`）与 `pull_request`（`main`）上新增用仓库
+  secret `STRIPE_SECRET_KEY` 完成的真实 Stripe 扣款步骤；缺密钥时该步骤
+  直接失败，不跳过。
 
 ## [v0.6.106] - 2026-09-28
 

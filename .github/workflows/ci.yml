@@ -47,6 +47,23 @@ jobs:
         run: python -m pip install --quiet pytest stripe
       - name: Run tests
         run: python -m pytest -q
+      # Issue #71: every push to `main` and every pull request to `main` also
+      # performs a real live charge. The key comes from the repository secret
+      # STRIPE_SECRET_KEY, mapped to the environment variable the CLI reads.
+      # A missing or empty secret makes that variable empty, so
+      # stripe_payments.live_secret_key() raises ConfigurationError, the CLI
+      # exits 2 and this step fails: the charge is never skipped.
+      - name: Charge the pre-created payment method with the repository secret
+        env:
+          STRIPE_LIVE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          # The pre-created pm_.../cus_... is stored as a repository variable
+          # (it is not sensitive); a missing value fails the charge too.
+          PAYMENT_METHOD: ${{ vars.STRIPE_PAYMENT_METHOD }}
+          CUSTOMER: ${{ vars.STRIPE_CUSTOMER }}
+        run: |
+          python -m stripe_payments verify \
+            --payment-method "$PAYMENT_METHOD" \
+            --customer "$CUSTOMER"
 
   live-payment:
     name: live payment verification

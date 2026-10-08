@@ -93,3 +93,39 @@ def test_live_payment_verification_cannot_run_on_push_or_pull_request():
     assert "continue-on-error" not in text, (
         "a failed live charge must fail the workflow, never pass silently"
     )
+
+
+# Issue #71: the CI run triggered by a push to `main` or a pull request to
+# `main` also performs a real live charge, using the repository secret
+# `STRIPE_SECRET_KEY`. A missing or empty secret must fail that charge
+# (the CLI exits 2), never skip it.
+REPOSITORY_CHARGE_SECRET_MAPPING = (
+    "STRIPE_LIVE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}"
+)
+VERIFY_COMMAND = "python -m stripe_payments verify"
+
+
+def test_ci_charges_on_push_and_pull_request_with_the_repository_secret():
+    text = _read(WORKFLOW)
+    assert text.count(VERIFY_COMMAND) == 2, (
+        "both the manual run and the push/PR run must execute "
+        "`python -m stripe_payments verify`"
+    )
+    assert REPOSITORY_CHARGE_SECRET_MAPPING in text, (
+        "the push/PR charge must take its key from the STRIPE_SECRET_KEY "
+        "repository secret"
+    )
+    assert "vars.STRIPE_PAYMENT_METHOD" in text, (
+        "the push/PR charge must read the pre-created payment method from a "
+        "repository variable"
+    )
+
+
+def test_push_and_pull_request_charge_is_never_skipped():
+    text = _read(WORKFLOW)
+    assert "secrets.STRIPE_SECRET_KEY != ''" not in text, (
+        "a missing repository secret must fail the charge, not skip it"
+    )
+    assert "continue-on-error" not in text, (
+        "a failed charge must fail the workflow, never pass silently"
+    )
