@@ -130,6 +130,10 @@ Stripe 付款测试（`tests/test_stripe_payments.py`），全部必须通过（
 
 一般 1 到 2 分钟
 
+### Q：卡住了怎么办？
+
+先修掉卡住的原因，再把 `ai-blocked` 换成 `ai-fix-needed`。
+
 本仓库用于 Orbi beta 端到端测试
 
 最后更新于 2026-09-28
