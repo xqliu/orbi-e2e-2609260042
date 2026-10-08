@@ -126,6 +126,10 @@ Stripe 付款测试（`tests/test_stripe_payments.py`），全部必须通过（
 说明当前 Python 环境没有安装 `pytest`。用 `python -m pip install pytest stripe`
 安装后，重新运行 `python -m pytest` 即可。
 
+### Q：草稿要多久？
+
+一般 1 到 2 分钟
+
 本仓库用于 Orbi beta 端到端测试
 
 最后更新于 2026-09-28
