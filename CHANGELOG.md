@@ -13,6 +13,10 @@
 - 在 `User outcome` Issue 模板中新增 `## Steps to reproduce` 小节，
   供提交者填写可照做的复现步骤。
 - 在 README 中新增联系邮箱 `support@orbi.build`。
+- 新增 Stripe live 付款入口 `stripe_payments.py`：`checkout` 子命令创建
+  Checkout 托管结账页，`verify` 子命令用预先创建的支付方式完成一笔真实扣款。
+- `CI` 工作流新增手动触发、需人工批准 `stripe-live` 环境的
+  `live payment verification` 任务。
 
 ## [v0.6.106] - 2026-09-28
 

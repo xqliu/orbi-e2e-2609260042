@@ -1,10 +1,10 @@
-"""Content checks for this repository's only artifacts.
+"""Content checks for this repository's artifacts.
 
-The repository ships no application code: its deliverables are the README
-and the GitHub Issue templates.  The `CI` workflow runs this suite so every
-delivery pull request and every commit on `main` carries a real test result
-instead of an empty check-run gate (Orbi's pre-release gate reads the check
-runs of the frozen base commit).
+The repository ships no application server: its deliverables are the README,
+the GitHub Issue templates and a small Stripe payment helper.  The `CI`
+workflow runs this suite so every delivery pull request and every commit on
+`main` carries a real test result instead of an empty check-run gate (Orbi's
+pre-release gate reads the check runs of the frozen base commit).
 """
 
 from pathlib import Path
@@ -12,6 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 README = REPO_ROOT / "README.md"
 ISSUE_TEMPLATE = REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "user-outcome.md"
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
 # GitHub shows a markdown issue template by the `name`/`about` fields of
 # its YAML front matter; the body sections are the ones the template
@@ -68,3 +69,27 @@ def test_issue_template_documents_every_section():
     text = _read(ISSUE_TEMPLATE)
     for section in ISSUE_TEMPLATE_SECTIONS:
         assert section in text, f"the issue template is missing {section!r}"
+
+
+def test_ci_has_a_protected_manual_live_payment_verification():
+    text = _read(WORKFLOW)
+    assert "workflow_dispatch:" in text, "CI needs a manual trigger"
+    assert "environment: stripe-live" in text, (
+        "the live run must use the protected 'stripe-live' environment"
+    )
+    assert "STRIPE_LIVE_SECRET_KEY: ${{ secrets.STRIPE_LIVE_SECRET_KEY }}" in text, (
+        "the live key must come from the environment secret"
+    )
+    assert "python -m stripe_payments verify" in text, (
+        "the live job must run the Stripe verification command"
+    )
+
+
+def test_live_payment_verification_cannot_run_on_push_or_pull_request():
+    text = _read(WORKFLOW)
+    assert "github.event_name == 'workflow_dispatch'" in text, (
+        "the live job must be gated to workflow_dispatch"
+    )
+    assert "continue-on-error" not in text, (
+        "a failed live charge must fail the workflow, never pass silently"
+    )

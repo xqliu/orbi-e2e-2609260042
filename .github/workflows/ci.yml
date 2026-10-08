@@ -5,6 +5,30 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Manual, protected run that performs one real live Stripe charge.
+  # It never runs on a pull request or push: the `live-payment` job below
+  # only starts for a workflow_dispatch event.
+  workflow_dispatch:
+    inputs:
+      payment_method:
+        description: "Pre-created Stripe payment method id (pm_...)"
+        required: true
+        type: string
+      customer:
+        description: "Customer id (cus_...) if the payment method is attached to one"
+        required: false
+        default: ""
+        type: string
+      amount:
+        description: "Amount in the smallest currency unit (default 50 = 0.50 USD)"
+        required: false
+        default: "50"
+        type: string
+      currency:
+        description: "ISO currency code (default usd)"
+        required: false
+        default: "usd"
+        type: string
 
 permissions:
   contents: read
@@ -20,6 +44,39 @@ jobs:
         with:
           python-version: "3.x"
       - name: Install test runner
-        run: python -m pip install --quiet pytest
+        run: python -m pip install --quiet pytest stripe
       - name: Run tests
         run: python -m pytest -q
+
+  live-payment:
+    name: live payment verification
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The protected `stripe-live` environment must require a manual review
+    # and hold the live secret key as an environment secret, so an unapproved
+    # run waits instead of charging.
+    environment: stripe-live
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+      - name: Install Stripe SDK
+        run: python -m pip install --quiet stripe
+      - name: Charge the pre-created payment method with the live key
+        # The dispatch inputs reach the shell through step env vars, never by
+        # being substituted into the `run` script, so an input value cannot
+        # inject shell code into the job that holds the live key.
+        env:
+          STRIPE_LIVE_SECRET_KEY: ${{ secrets.STRIPE_LIVE_SECRET_KEY }}
+          PAYMENT_METHOD: ${{ inputs.payment_method }}
+          CUSTOMER: ${{ inputs.customer }}
+          AMOUNT: ${{ inputs.amount }}
+          CURRENCY: ${{ inputs.currency }}
+        run: |
+          python -m stripe_payments verify \
+            --payment-method "$PAYMENT_METHOD" \
+            --customer "$CUSTOMER" \
+            --amount "$AMOUNT" \
+            --currency "$CURRENCY"
