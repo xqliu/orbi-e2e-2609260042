@@ -17,6 +17,8 @@
   Checkout 托管结账页，`verify` 子命令用预先创建的支付方式完成一笔真实扣款。
 - `CI` 工作流新增手动触发、需人工批准 `stripe-live` 环境的
   `live payment verification` 任务。
+- 新增 `功能建议` Issue 模板 `.github/ISSUE_TEMPLATE/feature-request.md`，
+  含 `## 想解决的问题` 与 `## 期望的效果` 两节。
 
 ## [v0.6.106] - 2026-09-28
 

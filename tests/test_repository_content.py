@@ -12,6 +12,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 README = REPO_ROOT / "README.md"
 ISSUE_TEMPLATE = REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "user-outcome.md"
+FEATURE_REQUEST_TEMPLATE = (
+    REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "feature-request.md"
+)
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
 # GitHub shows a markdown issue template by the `name`/`about` fields of
@@ -30,6 +33,14 @@ ISSUE_TEMPLATE_SECTIONS = (
     "## Evidence",
 )
 
+# The `功能建议` template is offered by its Chinese `name` and promises its
+# author the two sections the request asked for.
+FEATURE_REQUEST_NAME = "功能建议"
+FEATURE_REQUEST_SECTIONS = (
+    "## 想解决的问题",
+    "## 期望的效果",
+)
+
 
 def _read(path: Path) -> str:
     assert path.is_file(), f"{path.relative_to(REPO_ROOT)} is missing"
@@ -41,6 +52,15 @@ def _front_matter(text: str) -> str:
     assert text.startswith("---\n"), "the file must start with a YAML front matter"
     end = text.index("\n---", len("---\n"))
     return text[len("---\n"):end]
+
+
+def _front_matter_keys(text: str) -> set:
+    """Return the YAML front matter keys of a markdown file."""
+    return {
+        line.split(":", 1)[0].strip()
+        for line in _front_matter(text).splitlines()
+        if line.strip()
+    }
 
 
 def test_readme_is_not_empty():
@@ -56,13 +76,27 @@ def test_readme_ends_with_regression_line():
 
 
 def test_issue_template_front_matter_has_required_keys():
-    keys = {
-        line.split(":", 1)[0].strip()
-        for line in _front_matter(_read(ISSUE_TEMPLATE)).splitlines()
-        if line.strip()
-    }
+    keys = _front_matter_keys(_read(ISSUE_TEMPLATE))
     for key in ISSUE_TEMPLATE_FRONT_MATTER_KEYS:
         assert key in keys, f"the issue template front matter needs {key!r}"
+
+
+def test_feature_request_template_front_matter_has_required_keys():
+    keys = _front_matter_keys(_read(FEATURE_REQUEST_TEMPLATE))
+    for key in ISSUE_TEMPLATE_FRONT_MATTER_KEYS:
+        assert key in keys, f"the 功能建议 template front matter needs {key!r}"
+
+
+def test_feature_request_template_has_its_chinese_display_name():
+    assert f"name: {FEATURE_REQUEST_NAME}" in _read(FEATURE_REQUEST_TEMPLATE), (
+        "the template must be offered as 功能建议"
+    )
+
+
+def test_feature_request_template_documents_every_section():
+    text = _read(FEATURE_REQUEST_TEMPLATE)
+    for section in FEATURE_REQUEST_SECTIONS:
+        assert section in text, f"the 功能建议 template is missing {section!r}"
 
 
 def test_issue_template_documents_every_section():
