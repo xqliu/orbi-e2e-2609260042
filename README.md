@@ -15,7 +15,7 @@ Orbi beta e2e from signup (2026-09-26)
 
 ## 如何贡献
 
-本仓库不接受 pull request；要贡献，请通过 Issue 提出：
+欢迎提 Issue！本仓库不接受 pull request；要贡献，请通过 Issue 提出：
 
 1. 在本仓库的 Issues 中新建一个 Issue。
 2. 选择 `User outcome` 模板（模板文件为 `.github/ISSUE_TEMPLATE/user-outcome.md`），
