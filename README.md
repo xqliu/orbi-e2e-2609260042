@@ -141,6 +141,10 @@ Stripe 付款测试（`tests/test_stripe_payments.py`），全部必须通过（
 
 先修掉卡住的原因，再把 `ai-blocked` 换成 `ai-fix-needed`。
 
+### Q：运营看板的时间是什么时区？
+
+北京时间（UTC+8）
+
 本仓库用于 Orbi beta 端到端测试
 
 最后更新于 2026-09-28
