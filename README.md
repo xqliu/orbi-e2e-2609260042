@@ -28,7 +28,7 @@ Orbi beta e2e from signup (2026-09-26)
    `## 期望的效果` 两节。
 3. 维护者据此实现变更，并在 CI 检查通过后合并到 `main`。
 
-遇到问题或需要咨询，可发邮件至 support@orbi.build。
+遇到问题或需要咨询，可发邮件至 support@orbi.build。有问题可以在 Issue 里问。
 
 ## Tests
 
