@@ -35,6 +35,7 @@ class _Recorder:
             {
                 "path": path,
                 "authorization": headers.get("Authorization"),
+                "idempotency_key": headers.get("Idempotency-Key"),
                 "form": urllib.parse.parse_qs(body),
             }
         )
@@ -130,6 +131,21 @@ def test_create_live_charge_sends_the_documented_request(live_key, stripe_api):
     assert "customer" not in form
 
 
+def test_create_live_charge_sends_the_idempotency_key(live_key, stripe_api):
+    stripe_api.payload = {
+        "id": "pi_live_123",
+        "object": "payment_intent",
+        "status": "succeeded",
+    }
+    stripe_payments.create_live_charge(
+        payment_method="pm_abc", idempotency_key="20261005"
+    )
+
+    request = stripe_api.requests[-1]
+    assert request["path"] == "/v1/payment_intents"
+    assert request["idempotency_key"] == "20261005"
+
+
 def test_create_live_charge_sends_the_customer_when_provided(live_key, stripe_api):
     stripe_api.payload = {
         "id": "pi_live_1",
@@ -191,6 +207,46 @@ def test_cli_verify_logs_the_payment_intent_and_succeeds(live_key, stripe_api, c
 
     assert exit_code == 0
     assert "payment_intent id=pi_live_123 status=succeeded" in capsys.readouterr().out
+
+
+def test_cli_verify_sends_the_idempotency_key(live_key, stripe_api, capsys):
+    stripe_api.payload = {
+        "id": "pi_live_123",
+        "object": "payment_intent",
+        "status": "succeeded",
+    }
+    exit_code = stripe_payments.main(
+        [
+            "verify",
+            "--payment-method",
+            "pm_abc",
+            "--idempotency-key",
+            "20261005",
+        ]
+    )
+
+    assert exit_code == 0
+    assert stripe_api.requests[-1]["idempotency_key"] == "20261005"
+
+
+def test_cli_verify_rejects_an_empty_idempotency_key(
+    live_key, stripe_api, capsys
+):
+    exit_code = stripe_payments.main(
+        ["verify", "--payment-method", "pm_abc", "--idempotency-key", ""]
+    )
+
+    assert exit_code == 2
+    assert "--idempotency-key must not be empty" in capsys.readouterr().err
+    assert stripe_api.requests == []
+
+
+def test_verify_help_lists_the_idempotency_key_option(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["verify", "--help"])
+
+    assert excinfo.value.code == 0
+    assert "--idempotency-key" in capsys.readouterr().out
 
 
 def test_cli_verify_fails_when_the_charge_did_not_succeed(live_key, stripe_api, capsys):

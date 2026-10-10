@@ -93,11 +93,15 @@ def create_live_charge(
     amount: int = DEFAULT_AMOUNT,
     currency: str = DEFAULT_CURRENCY,
     customer: str | None = None,
+    idempotency_key: str | None = None,
 ) -> "stripe.PaymentIntent":
     """Charge the pre-created payment method with the live key.
 
     ``customer`` is only needed when the payment method is attached to a
     Stripe customer (Stripe requires the customer id in that case).
+    ``idempotency_key`` makes a retried call reuse the first PaymentIntent
+    instead of charging the card again; omitted, Stripe generates one per
+    request as before.
     """
     stripe.api_key = live_secret_key()
     params = {
@@ -109,6 +113,8 @@ def create_live_charge(
     }
     if customer:
         params["customer"] = customer
+    if idempotency_key:
+        params["idempotency_key"] = idempotency_key
     return stripe.PaymentIntent.create(**params)
 
 
@@ -136,6 +142,14 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="customer id (cus_...) of an attached payment method",
     )
+    verify.add_argument(
+        "--idempotency-key",
+        default=None,
+        help=(
+            "Stripe Idempotency-Key; a re-run with the same key reuses the "
+            "first PaymentIntent instead of charging again"
+        ),
+    )
     return parser
 
 
@@ -153,11 +167,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print(f"checkout_session id={session.id} url={session.url}")
             return 0
+        idempotency_key = args.idempotency_key
+        if idempotency_key is not None and not idempotency_key.strip():
+            raise ConfigurationError(
+                f"--idempotency-key must not be empty, got {idempotency_key!r}"
+            )
         intent = create_live_charge(
             payment_method=args.payment_method,
             amount=args.amount,
             currency=args.currency,
             customer=args.customer or None,
+            idempotency_key=idempotency_key,
         )
         print(f"payment_intent id={intent.id} status={intent.status}")
         return 0 if intent.status == "succeeded" else 1

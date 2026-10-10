@@ -74,9 +74,14 @@ jobs:
           CUSTOMER: ${{ inputs.customer }}
           AMOUNT: ${{ inputs.amount }}
           CURRENCY: ${{ inputs.currency }}
+          # GitHub keeps the same `run_id` when a run is re-run (only the
+          # `run_attempt` changes), so a re-run reuses the first
+          # PaymentIntent instead of charging the card a second time.
+          IDEMPOTENCY_KEY: ${{ github.run_id }}
         run: |
           python -m stripe_payments verify \
             --payment-method "$PAYMENT_METHOD" \
             --customer "$CUSTOMER" \
             --amount "$AMOUNT" \
-            --currency "$CURRENCY"
+            --currency "$CURRENCY" \
+            --idempotency-key "$IDEMPOTENCY_KEY"
