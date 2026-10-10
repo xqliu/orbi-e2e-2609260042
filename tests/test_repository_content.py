@@ -7,7 +7,11 @@ workflow runs this suite so every delivery pull request and every commit on
 pre-release gate reads the check runs of the frozen base commit).
 """
 
+import argparse
+import re
 from pathlib import Path
+
+import stripe_payments
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 README = REPO_ROOT / "README.md"
@@ -16,6 +20,12 @@ FEATURE_REQUEST_TEMPLATE = (
     REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "feature-request.md"
 )
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+
+# Issue #104: the CI `live payment verification` job runs the `verify`
+# subcommand; the content check below asserts every flag after that command
+# is defined by the `verify` subparser of `stripe_payments._parser()`.
+STRIPE_VERIFY_COMMAND = "python -m stripe_payments verify"
+STRIPE_FLAG_RE = re.compile(r"--[a-z][a-z-]*")
 
 # GitHub shows a markdown issue template by the `name`/`about` fields of
 # its YAML front matter; the body sections are the ones the template
@@ -65,6 +75,32 @@ def _front_matter_keys(text: str) -> set:
         for line in _front_matter(text).splitlines()
         if line.strip()
     }
+
+
+def _verify_subparser_option_strings() -> set:
+    """Return every option string the `verify` subcommand parser defines."""
+    parser = stripe_payments._parser()
+    subparsers = next(
+        action
+        for action in parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    verify = subparsers.choices["verify"]
+    return {
+        option
+        for action in verify._actions
+        for option in action.option_strings
+    }
+
+
+def _ci_stripe_verify_flags() -> list:
+    """Return every --flag CI passes to the Stripe verify command."""
+    text = _read(WORKFLOW)
+    assert STRIPE_VERIFY_COMMAND in text, (
+        f"the CI workflow must invoke {STRIPE_VERIFY_COMMAND!r}"
+    )
+    after_command = text.index(STRIPE_VERIFY_COMMAND) + len(STRIPE_VERIFY_COMMAND)
+    return STRIPE_FLAG_RE.findall(text[after_command:])
 
 
 def test_readme_is_not_empty():
@@ -120,6 +156,19 @@ def test_ci_has_a_protected_manual_live_payment_verification():
     )
     assert "python -m stripe_payments verify" in text, (
         "the live job must run the Stripe verification command"
+    )
+
+
+def test_ci_stripe_verify_flags_are_defined_by_the_verify_subparser():
+    flags = _ci_stripe_verify_flags()
+    assert flags, (
+        f"the CI workflow must pass flags to {STRIPE_VERIFY_COMMAND!r}"
+    )
+    option_strings = _verify_subparser_option_strings()
+    missing = [flag for flag in flags if flag not in option_strings]
+    assert not missing, (
+        f"CI passes {missing} to {STRIPE_VERIFY_COMMAND!r}, but the verify "
+        f"subparser only defines {sorted(option_strings)}"
     )
 
 
