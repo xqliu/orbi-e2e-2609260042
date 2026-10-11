@@ -143,27 +143,39 @@ def create_live_charge(
     return stripe.PaymentIntent.create(**params)
 
 
+def _list_all(resource, *, limit: int):
+    """Yield every record of a Stripe list, following pagination to the end.
+
+    ``limit`` is the page size (Stripe caps one list call at 100); the
+    official SDK's ``auto_paging_iter()`` keeps requesting the next page
+    (``starting_after`` = last id) until ``has_more`` is false, so no record
+    beyond the first page is dropped.
+    """
+    return resource.list(limit=limit).auto_paging_iter()
+
+
 def export_data(
     *, output_dir: str, formats: Sequence[str], limit: int
 ) -> tuple[int, int, int]:
     """Read the three Stripe lists, then write CSV/JSON files for them.
 
-    All three lists are fetched before any file is written, so a failing
-    Stripe call leaves no half-written export behind.
+    Every page of all three lists is fetched before any file is written, so a
+    failing Stripe call (anywhere in the pagination) leaves no half-written
+    export behind.
     """
     stripe.api_key = live_secret_key()
     rows = {
         "payments": [
             _payment_row(payment)
-            for payment in stripe.PaymentIntent.list(limit=limit).data
+            for payment in _list_all(stripe.PaymentIntent, limit=limit)
         ],
         "refunds": [
             _refund_row(refund)
-            for refund in stripe.Refund.list(limit=limit).data
+            for refund in _list_all(stripe.Refund, limit=limit)
         ],
         "customers": [
             _customer_row(customer)
-            for customer in stripe.Customer.list(limit=limit).data
+            for customer in _list_all(stripe.Customer, limit=limit)
         ],
     }
 
@@ -274,8 +286,8 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_LIMIT,
         help=(
-            f"records per category, 1-{MAX_LIMIT} "
-            f"(default {DEFAULT_LIMIT})"
+            f"records per list request, 1-{MAX_LIMIT} "
+            f"(default {DEFAULT_LIMIT}); every record is exported"
         ),
     )
     export.add_argument(
