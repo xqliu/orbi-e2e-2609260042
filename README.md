@@ -33,6 +33,11 @@ Orbi beta e2e from signup (2026-09-26)
 遇到问题或需要咨询，可发邮件至 support@orbi.build。
 有问题可以在 Issue 里问。
 
+## 反馈问题
+
+遇到问题或有疑问时，请先搜索一下仓库里已有的 Issue，确认没有相同的问题后再新建，
+避免重复提问；新建时请使用 [Issue 模板](.github/ISSUE_TEMPLATE/user-outcome.md)。
+
 ## Tests
 
 `.github/workflows/ci.yml` runs the repository content checks and the
