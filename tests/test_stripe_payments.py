@@ -34,6 +34,11 @@ class _Recorder:
         # queries three different resources in one run.
         self.list_payloads = {}
         self.list_statuses = {}
+        # Per-path cursor pages, keyed by the `starting_after` cursor the SDK
+        # sends (``None`` for the first request).  Stripe paginates by the id
+        # of the last record on the previous page.
+        self.list_pages = {}
+        self.list_page_statuses = {}
 
     def record(self, path, headers, body):
         self.requests.append(
@@ -72,12 +77,24 @@ class _StripeServer:
                 recorder_self.record(
                     parsed.path, self.headers, parsed.query
                 )
-                status = recorder_self.list_statuses.get(
-                    parsed.path, recorder_self.status
-                )
-                payload = recorder_self.list_payloads.get(
-                    parsed.path, {"object": "list", "data": []}
-                )
+                params = urllib.parse.parse_qs(parsed.query)
+                starting_after = params.get("starting_after", [None])[0]
+                if parsed.path in recorder_self.list_pages:
+                    status = recorder_self.list_page_statuses.get(
+                        (parsed.path, starting_after), recorder_self.status
+                    )
+                    payload = recorder_self.list_pages[parsed.path][starting_after]
+                else:
+                    status = recorder_self.list_statuses.get(
+                        parsed.path, recorder_self.status
+                    )
+                    payload = recorder_self.list_payloads.get(
+                        parsed.path, {"object": "list", "data": []}
+                    )
+                # Stripe's list responses carry the collection ``url``; the SDK
+                # needs it to follow pagination to the next page.
+                if payload.get("object") == "list" and "url" not in payload:
+                    payload = {**payload, "url": parsed.path}
                 self._send_json(status, payload)
 
             def log_message(self, *args):  # keep pytest output clean
@@ -380,8 +397,8 @@ def test_main_guard_exits_with_the_cli_result(monkeypatch, capsys):
 # --- export (Issue #106) -------------------------------------------------
 
 
-def _list_payload(*items):
-    return {"object": "list", "data": list(items), "has_more": False}
+def _list_payload(*items, has_more=False):
+    return {"object": "list", "data": list(items), "has_more": has_more}
 
 
 @pytest.fixture
@@ -659,4 +676,141 @@ def test_module_export_fails_without_the_secret_and_creates_nothing(tmp_path):
 
     assert result.returncode == 2
     assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
+    assert not output_dir.exists()
+
+
+# --- export pagination (Issue #112) -------------------------------------
+
+
+def _payment(index):
+    return {
+        "id": f"pi_{index}",
+        "object": "payment_intent",
+        "amount": 100 * index,
+        "currency": "usd",
+        "status": "succeeded",
+        "created": 1700000000 + index,
+    }
+
+
+def _refund(index):
+    return {
+        "id": f"re_{index}",
+        "object": "refund",
+        "payment_intent": f"pi_{index}",
+        "amount": 100 * index,
+        "currency": "usd",
+        "status": "succeeded",
+        "created": 1700000100 + index,
+    }
+
+
+def _customer(index):
+    return {
+        "id": f"cus_{index}",
+        "object": "customer",
+        "email": f"buyer{index}@example.com",
+        "created": 1700000200 + index,
+    }
+
+
+def _csv_data_rows(output_dir, name):
+    rows = list(
+        csv.reader((output_dir / f"{name}.csv").open(newline="", encoding="utf-8"))
+    )
+    return rows[1:]
+
+
+def test_export_follows_pagination_to_the_end(
+    live_key, stripe_api, tmp_path, capsys
+):
+    """The first page is followed to ``has_more: false`` (Issue #112)."""
+    stripe_api.list_payloads = {
+        "/v1/refunds": _list_payload(_refund(1)),
+        "/v1/customers": _list_payload(_customer(1)),
+    }
+    stripe_api.list_pages = {
+        "/v1/payment_intents": {
+            None: _list_payload(_payment(1), has_more=True),
+            "pi_1": _list_payload(_payment(2), _payment(3)),
+        }
+    }
+
+    output_dir = tmp_path / "export"
+    exit_code = stripe_payments.main(["export", "--output-dir", str(output_dir)])
+
+    assert exit_code == 0
+    assert (
+        f"exported payments=3 refunds=1 customers=1 to {output_dir}/"
+        in capsys.readouterr().out
+    )
+
+    payment_requests = [
+        request
+        for request in stripe_api.requests
+        if request["path"] == "/v1/payment_intents"
+    ]
+    assert [
+        request["form"].get("starting_after") for request in payment_requests
+    ] == [None, ["pi_1"]]
+    assert [
+        request["form"].get("limit") for request in payment_requests
+    ] == [["10"], ["10"]]
+
+    assert [row[0] for row in _csv_data_rows(output_dir, "payments")] == [
+        "pi_1",
+        "pi_2",
+        "pi_3",
+    ]
+
+    json_payments = json.loads(
+        (output_dir / "payments.json").read_text(encoding="utf-8")
+    )
+    assert [row["id"] for row in json_payments] == ["pi_1", "pi_2", "pi_3"]
+
+    # Acceptance: the stdout numbers are the CSV data row counts.
+    for name, expected in (("payments", 3), ("refunds", 1), ("customers", 1)):
+        assert len(_csv_data_rows(output_dir, name)) == expected
+
+
+def test_export_single_page_makes_exactly_one_request_per_category(
+    live_key, stripe_lists, tmp_path
+):
+    stripe_payments.main(["export", "--output-dir", str(tmp_path / "export")])
+
+    assert [request["path"] for request in stripe_lists.requests] == [
+        "/v1/payment_intents",
+        "/v1/refunds",
+        "/v1/customers",
+    ]
+
+
+def test_export_writes_nothing_when_a_later_page_fails(
+    live_key, stripe_api, tmp_path, capsys
+):
+    stripe_api.list_pages = {
+        "/v1/payment_intents": {
+            None: _list_payload(_payment(1), has_more=True),
+            "pi_1": {
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "Invalid API Key provided",
+                }
+            },
+        }
+    }
+    stripe_api.list_page_statuses = {("/v1/payment_intents", "pi_1"): 401}
+
+    output_dir = tmp_path / "export"
+    exit_code = stripe_payments.main(["export", "--output-dir", str(output_dir)])
+
+    assert exit_code == 1
+    assert "HTTP 401" in capsys.readouterr().err
+    assert [request["path"] for request in stripe_api.requests] == [
+        "/v1/payment_intents",
+        "/v1/payment_intents",
+    ]
+    assert [
+        request["form"].get("starting_after") for request in stripe_api.requests
+    ] == [None, ["pi_1"]]
     assert not output_dir.exists()
