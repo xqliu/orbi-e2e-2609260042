@@ -112,6 +112,7 @@ def _git_check_ignore(relative_path: str) -> str:
         capture_output=True,
         text=True,
         check=False,
+        timeout=60,
     )
     return result.stdout.strip()
 
