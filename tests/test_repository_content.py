@@ -9,6 +9,7 @@ pre-release gate reads the check runs of the frozen base commit).
 
 import argparse
 import re
+import subprocess
 from pathlib import Path
 
 import stripe_payments
@@ -101,6 +102,28 @@ def _ci_stripe_verify_flags() -> list:
     )
     after_command = text.index(STRIPE_VERIFY_COMMAND) + len(STRIPE_VERIFY_COMMAND)
     return STRIPE_FLAG_RE.findall(text[after_command:])
+
+
+def _git_check_ignore(relative_path: str) -> str:
+    """Return `git check-ignore -v` output for a path, empty when not ignored."""
+    result = subprocess.run(
+        ["git", "check-ignore", "-v", relative_path],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    return result.stdout.strip()
+
+
+def test_gitignore_ignores_the_default_export_directory():
+    """Issue #114: a live export must not be committable from the repo root."""
+    directory = stripe_payments.DEFAULT_OUTPUT_DIR
+    output = _git_check_ignore(f"{directory}/customers.csv")
+    assert output.startswith(".gitignore:"), (
+        f"the .gitignore must ignore the default export directory {directory!r}"
+    )
 
 
 def test_readme_is_not_empty():
