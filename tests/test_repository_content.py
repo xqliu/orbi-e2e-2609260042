@@ -36,10 +36,8 @@ ISSUE_TEMPLATE_FRONT_MATTER_KEYS = ("name", "about")
 # Issue #39 appends this exact line as the README's final line.
 # Issue #55 appends this exact line as the new README final line.
 # Issue #97 appends this exact line as the new README final line.
-README_LAST_LINE = (
-    "This repository is used for Orbi beta end-to-end checks "
-    "(v0.7.28 promotion gate)"
-)
+# Issue #120 appends this exact line as the new README final line.
+README_LAST_LINE = "Beta regression: Gemini native protocol hotfix v0.7.40."
 ISSUE_TEMPLATE_SECTIONS = (
     "## User outcome",
     "## Preconditions",

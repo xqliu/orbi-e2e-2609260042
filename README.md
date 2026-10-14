@@ -174,3 +174,4 @@ Wake test 10-05
 本仓库用于 Orbi Cloud 每次发版前的新用户全流程验收（v0.7.12，2026-10-07）
 
 This repository is used for Orbi beta end-to-end checks (v0.7.28 promotion gate)
+Beta regression: Gemini native protocol hotfix v0.7.40.
