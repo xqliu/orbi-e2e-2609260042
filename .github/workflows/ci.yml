@@ -38,11 +38,24 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The tests run once per supported Node.js major version, so a break on
+    # either 20 or 22 fails the workflow instead of hiding behind one runtime.
+    strategy:
+      matrix:
+        node-version: [20, 22]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.x"
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          # This repository has no npm project, so dependency caching is off.
+          package-manager-cache: false
+      - name: Show Node.js version
+        run: node --version
       - name: Install test runner
         run: python -m pip install --quiet pytest stripe
       - name: Run tests
