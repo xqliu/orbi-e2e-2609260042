@@ -1,0 +1,12 @@
+name: Slow check (e2e orbi#1792)
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  slow:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait when the PR title asks for a slow check
+        if: contains(github.event.pull_request.title, '[slow]')
+        run: sleep 2400
+      - run: echo done
