@@ -50,6 +50,17 @@ python -m pytest
 
 CI 会在每个 PR 上运行这些检查。
 
+## Run the tests locally
+
+在仓库根目录执行（需要 Python 3，并先安装测试依赖
+`python3 -m pip install pytest stripe`）：
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+测试用例用 pytest 编写，CI 也以 `python -m pytest` 运行同一套检查。
+
 ## Running the content checks locally
 
 The checks need Python 3, `pytest` and the official `stripe` SDK, and the

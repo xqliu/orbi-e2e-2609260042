@@ -46,6 +46,10 @@ ISSUE_TEMPLATE_SECTIONS = (
     "## Evidence",
 )
 
+# Issue #202 documents how to run every test locally in the README.
+README_TESTS_HEADING = "## Run the tests locally"
+README_TESTS_COMMAND = "python3 -m unittest discover -s tests -v"
+
 # The `功能建议` template is offered by its Chinese `name` and promises its
 # author the two sections the request asked for.
 FEATURE_REQUEST_NAME = "功能建议"
@@ -126,6 +130,17 @@ def test_gitignore_ignores_the_default_export_directory():
 
 def test_readme_is_not_empty():
     assert _read(README).strip(), "README.md is empty"
+
+
+def test_readme_documents_running_the_tests_locally():
+    """Issue #202: the README shows the command that runs the local tests."""
+    text = _read(README)
+    assert README_TESTS_HEADING in text, (
+        f"the README needs a {README_TESTS_HEADING!r} section"
+    )
+    assert README_TESTS_COMMAND in text, (
+        f"the {README_TESTS_HEADING!r} section must show {README_TESTS_COMMAND!r}"
+    )
 
 
 def test_readme_ends_with_regression_line():
