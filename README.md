@@ -59,7 +59,16 @@ CI 会在每个 PR 上运行这些检查。
 python3 -m unittest discover -s tests -v
 ```
 
-测试用例用 pytest 编写，CI 也以 `python -m pytest` 运行同一套检查。
+测试用例是 pytest 风格的函数，`unittest` 收集不到它们，所以上面这条命令并不会
+真正跑测试：依赖装好后它报告 `Ran 0 tests`、以 `NO TESTS RAN` 结束并返回退出码
+5；依赖没装时它报 `ModuleNotFoundError: No module named 'pytest'`（或
+`'stripe'`）。这两种结果都说明测试没有运行，不等于测试通过。要在本地跑完全部
+测试，改用与 CI 相同的命令，pytest 汇总报告全部通过（例如 `44 passed`，没有
+`failed`）即成功：
+
+```sh
+python3 -m pytest
+```
 
 ## Running the content checks locally
 
