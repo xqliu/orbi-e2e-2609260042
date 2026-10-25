@@ -22,3 +22,4 @@
 2026-10-21 beta v0.8.8 acceptance: new tenant pipeline verified.
 2026-10-21 v0.8.10 production-promotion fixed-repo acceptance
 2026-10-21 beta v0.8.11 / Core v0.7.14 final fixed-repo acceptance
+2026-10-25 v0.8.14 晋升前新用户全流程验收
