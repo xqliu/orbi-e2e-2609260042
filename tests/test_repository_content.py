@@ -50,6 +50,13 @@ ISSUE_TEMPLATE_SECTIONS = (
 README_TESTS_HEADING = "## Run the tests locally"
 README_TESTS_COMMAND = "python3 -m unittest discover -s tests -v"
 
+# Issue #211 appends this exact line as the final line of the acceptance log.
+E2E_LOG = REPO_ROOT / "docs" / "e2e-log.md"
+E2E_LOG_LAST_LINE = "2026-10-27 周报第 4 期 fix-base 演示"
+# The log kept exactly these 26 lines before Issue #211 appended its line.
+E2E_LOG_PREVIOUS_LAST_LINE = "v0.8.17 晋升前新用户全流程验收记录"
+E2E_LOG_LINE_COUNT = 27
+
 # Issue #207 adds a Chinese 「运行测试」 section that runs every test with the
 # same command as the CI `Run tests` step.
 README_RUN_TESTS_HEADING = "## 运行测试"
@@ -193,6 +200,22 @@ def test_readme_ends_with_regression_line():
     assert lines[-1] == README_LAST_LINE, (
         f"the README must end with the {README_LAST_LINE!r} line, "
         f"got {lines[-1]!r}"
+    )
+
+
+def test_e2e_log_ends_with_the_issue_211_line():
+    lines = _read(E2E_LOG).splitlines()
+    assert lines[-1] == E2E_LOG_LAST_LINE, (
+        f"the e2e log must end with the {E2E_LOG_LAST_LINE!r} line, "
+        f"got {lines[-1]!r}"
+    )
+    assert len(lines) == E2E_LOG_LINE_COUNT, (
+        f"the e2e log must keep its {E2E_LOG_LINE_COUNT - 1} existing lines and "
+        f"append exactly one, got {len(lines)} lines"
+    )
+    assert lines[-2] == E2E_LOG_PREVIOUS_LAST_LINE, (
+        "the line Issue #211 appended must not disturb the history before it, "
+        f"expected {E2E_LOG_PREVIOUS_LAST_LINE!r} second to last"
     )
 
 
