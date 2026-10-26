@@ -193,5 +193,19 @@ Wake test 10-05
 
 本仓库用于 Orbi Cloud 每次发版前的新用户全流程验收（v0.7.12，2026-10-07）
 
+## 运行测试
+
+在仓库根目录执行下面的命令，它会用 pytest 运行 `tests/` 下的全部测试
+（`tests/test_repository_content.py` 与 `tests/test_stripe_payments.py`）：
+
+```sh
+python -m pytest
+```
+
+汇总报告里全部通过（没有 `failed`）才算成功；这条命令与 CI 工作流
+`.github/workflows/ci.yml` 里 `Run tests` 步骤用的是同一个入口。如果命令报
+`No module named pytest`，说明当前环境没有安装 pytest，这不是测试通过：先运行
+`python -m pip install pytest stripe` 安装依赖，再重新执行 `python -m pytest`。
+
 This repository is used for Orbi beta end-to-end checks (v0.7.28 promotion gate)
 Beta regression: Gemini native protocol hotfix v0.7.40.

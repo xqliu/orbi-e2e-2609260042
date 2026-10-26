@@ -50,6 +50,12 @@ ISSUE_TEMPLATE_SECTIONS = (
 README_TESTS_HEADING = "## Run the tests locally"
 README_TESTS_COMMAND = "python3 -m unittest discover -s tests -v"
 
+# Issue #207 adds a Chinese 「运行测试」 section that runs every test with the
+# same command as the CI `Run tests` step.
+README_RUN_TESTS_HEADING = "## 运行测试"
+README_RUN_TESTS_COMMAND = "python -m pytest"
+README_RUN_TESTS_DEPENDENCIES = "python -m pip install pytest stripe"
+
 # The `功能建议` template is offered by its Chinese `name` and promises its
 # author the two sections the request asked for.
 FEATURE_REQUEST_NAME = "功能建议"
@@ -140,6 +146,45 @@ def test_readme_documents_running_the_tests_locally():
     )
     assert README_TESTS_COMMAND in text, (
         f"the {README_TESTS_HEADING!r} section must show {README_TESTS_COMMAND!r}"
+    )
+
+
+def _readme_section(heading: str) -> str:
+    """Return the body of a `## ` README section, up to the next `## `."""
+    text = _read(README)
+    assert f"\n{heading}\n" in text, f"the README needs a {heading!r} section"
+    body = text.split(f"\n{heading}\n", 1)[1]
+    return body.split("\n## ", 1)[0]
+
+
+def test_readme_documents_how_to_run_the_tests():
+    """Issue #207: a 「运行测试」 section runs every test with pytest."""
+    body = _readme_section(README_RUN_TESTS_HEADING)
+    assert README_RUN_TESTS_COMMAND in body, (
+        f"the {README_RUN_TESTS_HEADING!r} section must show "
+        f"{README_RUN_TESTS_COMMAND!r}"
+    )
+    assert "tests/" in body, (
+        f"the {README_RUN_TESTS_HEADING!r} section must say it runs the "
+        "tests under tests/"
+    )
+    # The documented command is the one CI runs, so the section cannot drift
+    # away from the real test entry point.
+    assert README_RUN_TESTS_COMMAND in _read(WORKFLOW), (
+        f"the CI Run tests step must use {README_RUN_TESTS_COMMAND!r}"
+    )
+
+
+def test_readme_documents_the_missing_pytest_repair():
+    """Issue #207: a missing pytest is reported as not a passing test run."""
+    body = _readme_section(README_RUN_TESTS_HEADING)
+    assert "No module named pytest" in body, (
+        f"the {README_RUN_TESTS_HEADING!r} section must name the failure "
+        "message of a missing pytest"
+    )
+    assert README_RUN_TESTS_DEPENDENCIES in body, (
+        f"the {README_RUN_TESTS_HEADING!r} section must show the repair "
+        f"command {README_RUN_TESTS_DEPENDENCIES!r}"
     )
 
 
