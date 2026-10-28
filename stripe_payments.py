@@ -18,11 +18,15 @@ that talks to the Stripe API with the operator's live secret key.
   on another day.  ``--format csv|json|both`` picks the file types
   (``both`` by default), so an operator who only needs CSV no longer has to
   delete the JSON files by hand.  The CSV header row is Chinese (Issue #235),
-  e.g. ``payments-<date>.csv`` starts with
-  ``编号,金额,币种,状态,创建时间``; the JSON keys stay English.
+  e.g. ``payments-<date>.csv`` is
+  ``编号,金额,币种,状态,创建时间,客户邮箱``; the JSON keys stay English.
+  The ``客户邮箱`` column (Issue #239) is the paying customer's email, read
+  from the Customers list the export already fetches; a payment without a
+  customer, a customer without an email and a customer id outside the
+  exported list leave it empty.
   ``--customer cus_...`` narrows the export to one customer's payments and
-  refunds (``payments-<date>.csv`` then carries a ``customer`` column, CSV
-  header ``客户``); omitted, the whole account is exported as before.
+  refunds (``payments-<date>.csv`` then also carries a ``customer`` column,
+  CSV header ``客户``); omitted, the whole account is exported as before.
 * ``python -m stripe_payments summary`` prints the payments total, the refunds
   total and the net income per currency, one currency per line, so a daily
   check does not need the exported CSV files.  ``--currency usd`` prints only
@@ -66,7 +70,14 @@ DEFAULT_LIMIT = 10
 MAX_LIMIT = 100
 DEFAULT_OUTPUT_DIR = "export"
 EXPORT_COLUMNS = {
-    "payments": ("id", "amount", "currency", "status", "created"),
+    "payments": (
+        "id",
+        "amount",
+        "currency",
+        "status",
+        "created",
+        "customer_email",
+    ),
     "refunds": (
         "id",
         "payment_intent",
@@ -85,6 +96,7 @@ EXPORT_COLUMNS = {
 EXPORT_HEADERS = {
     "id": "编号",
     "customer": "客户",
+    "customer_email": "客户邮箱",
     "payment_intent": "付款编号",
     "amount": "金额",
     "currency": "币种",
@@ -227,15 +239,27 @@ def export_data(
         for refund in _list_all(stripe.Refund, limit=limit)
         if customer is None or refund.payment_intent in payment_intent_ids
     ]
+    customers = list(_list_all(stripe.Customer, limit=limit))
+    # Issue #239: the payments CSV shows who paid.  The Customers list is
+    # already read for the customers export, so the email column reuses it:
+    # ``{customer id: email}`` maps each payment's documented ``customer`` id
+    # to that customer's address without a second request.
+    customer_emails = {
+        customer_record.id: getattr(customer_record, "email", None) or ""
+        for customer_record in customers
+    }
     rows = {
         "payments": [
-            _payment_row(payment, with_customer=customer is not None)
+            _payment_row(
+                payment,
+                customer_emails=customer_emails,
+                with_customer=customer is not None,
+            )
             for payment in payments
         ],
         "refunds": [_refund_row(refund) for refund in refunds],
         "customers": [
-            _customer_row(customer_record)
-            for customer_record in _list_all(stripe.Customer, limit=limit)
+            _customer_row(customer_record) for customer_record in customers
         ],
     }
 
@@ -345,13 +369,19 @@ def _payment_columns() -> tuple[str, ...]:
 
 
 def _payment_row(
-    payment: "stripe.PaymentIntent", *, with_customer: bool = False
+    payment: "stripe.PaymentIntent",
+    *,
+    customer_emails: dict[str, str],
+    with_customer: bool = False,
 ) -> dict:
     """One payments row; a ``--customer`` export also carries the customer id.
 
     The id comes from the payment record itself (Stripe filtered the list by
     the requested customer), so the column reports the customer the row
-    actually belongs to instead of echoing the command-line argument.
+    actually belongs to instead of echoing the command-line argument.  The
+    email is looked up from that same id (Issue #239); a payment without a
+    customer, a customer without an email and an id outside the exported
+    customer list leave the cell empty.
     """
     row = {"id": payment.id}
     if with_customer:
@@ -361,6 +391,10 @@ def _payment_row(
         currency=payment.currency,
         status=payment.status,
         created=_created(payment.created),
+    )
+    customer_id = getattr(payment, "customer", None)
+    row["customer_email"] = (
+        customer_emails.get(customer_id, "") if customer_id else ""
     )
     return row
 

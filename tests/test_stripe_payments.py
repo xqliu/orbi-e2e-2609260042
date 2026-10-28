@@ -426,6 +426,7 @@ def stripe_lists(stripe_api):
             {
                 "id": "pi_1",
                 "object": "payment_intent",
+                "customer": "cus_1",
                 "amount": 100,
                 "currency": "usd",
                 "status": "succeeded",
@@ -487,9 +488,17 @@ def test_cli_export_writes_csv_and_json_for_every_category(
     }
     # Issue #235: the CSV header row is the Chinese column name the operator
     # reads in a spreadsheet; the JSON keys stay the English field names.
+    # Issue #239: the payments CSV ends with the paying customer's email.
     assert csv_rows["payments"] == [
-        ["编号", "金额", "币种", "状态", "创建时间"],
-        ["pi_1", "100", "usd", "succeeded", "2023-11-14T22:13:20Z"],
+        ["编号", "金额", "币种", "状态", "创建时间", "客户邮箱"],
+        [
+            "pi_1",
+            "100",
+            "usd",
+            "succeeded",
+            "2023-11-14T22:13:20Z",
+            "buyer@example.com",
+        ],
     ]
     assert csv_rows["refunds"] == [
         ["编号", "付款编号", "金额", "币种", "状态", "创建时间"],
@@ -514,6 +523,7 @@ def test_cli_export_writes_csv_and_json_for_every_category(
             "currency": "usd",
             "status": "succeeded",
             "created": "2023-11-14T22:13:20Z",
+            "customer_email": "buyer@example.com",
         }
     ]
     assert json_data["refunds"] == [
@@ -616,6 +626,7 @@ def test_cli_export_format_both_writes_both_files(
             "currency": "usd",
             "status": "succeeded",
             "created": "2023-11-14T22:13:20Z",
+            "customer_email": "buyer@example.com",
         }
     ]
     csv_header = next(
@@ -631,6 +642,7 @@ def test_cli_export_format_both_writes_both_files(
         "币种",
         "状态",
         "创建时间",
+        "客户邮箱",
     ]
 
 
@@ -646,7 +658,7 @@ def test_every_exported_csv_header_is_a_chinese_column_name(
     assert stripe_payments.main(["export", "--output-dir", str(output_dir)]) == 0
 
     expected_headers = {
-        "payments": ["编号", "金额", "币种", "状态", "创建时间"],
+        "payments": ["编号", "金额", "币种", "状态", "创建时间", "客户邮箱"],
         "refunds": ["编号", "付款编号", "金额", "币种", "状态", "创建时间"],
         "customers": ["编号", "邮箱", "创建时间"],
     }
@@ -1398,8 +1410,16 @@ def test_cli_export_customer_exports_only_that_customers_payments_and_refunds(
     assert requests[1]["form"]["limit"] == ["10"]
 
     assert _csv_rows(output_dir, "payments") == [
-        ["编号", "客户", "金额", "币种", "状态", "创建时间"],
-        ["pi_1", "cus_1", "2500", "usd", "succeeded", "2023-11-14T22:13:20Z"],
+        ["编号", "客户", "金额", "币种", "状态", "创建时间", "客户邮箱"],
+        [
+            "pi_1",
+            "cus_1",
+            "2500",
+            "usd",
+            "succeeded",
+            "2023-11-14T22:13:20Z",
+            "buyer1@example.com",
+        ],
     ]
     # Acceptance: every payments.csv row carries the requested customer id, and
     # the value is the payment record's own customer (see the provenance test
@@ -1421,6 +1441,7 @@ def test_cli_export_customer_exports_only_that_customers_payments_and_refunds(
             "currency": "usd",
             "status": "succeeded",
             "created": "2023-11-14T22:13:20Z",
+            "customer_email": "buyer1@example.com",
         }
     ]
 
@@ -1428,7 +1449,7 @@ def test_cli_export_customer_exports_only_that_customers_payments_and_refunds(
 def test_export_without_customer_sends_no_customer_parameter_and_keeps_the_columns(
     live_key, stripe_lists, export_date, tmp_path
 ):
-    """Not passing --customer keeps the export exactly as it was."""
+    """Not passing --customer adds no 客户 column (Issue #239 kept the email)."""
     output_dir = tmp_path / "export"
     assert stripe_payments.main(["export", "--output-dir", str(output_dir)]) == 0
 
@@ -1441,6 +1462,7 @@ def test_export_without_customer_sends_no_customer_parameter_and_keeps_the_colum
         "币种",
         "状态",
         "创建时间",
+        "客户邮箱",
     ]
     assert "customer" not in json.loads(
         _export_file(output_dir, "payments", "json").read_text(encoding="utf-8")
@@ -1488,6 +1510,85 @@ def test_export_customer_column_comes_from_the_payment_record(
     assert {(row[0], row[1]) for row in _csv_rows(output_dir, "payments")[1:]} == {
         ("pi_1", "cus_1"),
         ("pi_2", "cus_9"),
+    }
+    # The email is looked up from each row's own customer id, so a record of a
+    # customer outside the exported customer list stays blank instead of
+    # inheriting another customer's email.
+    assert {row[0]: row[6] for row in _csv_rows(output_dir, "payments")[1:]} == {
+        "pi_1": "buyer1@example.com",
+        "pi_2": "",
+    }
+
+
+def test_export_payments_csv_carries_the_customer_email(
+    live_key, stripe_api, export_date, tmp_path
+):
+    """Issue #239: 对账时 payments CSV 直接显示付款客户的邮箱。
+
+    The email comes from the Customers list the export already reads, looked
+    up by each payment's own ``customer`` id.  A guest payment (no customer),
+    a customer without an email and a customer id outside the exported list
+    all stay blank so the operator sees a missing value instead of a stale or
+    borrowed address.
+    """
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            {
+                "id": "pi_1",
+                "object": "payment_intent",
+                "customer": "cus_1",
+                "amount": 100,
+                "currency": "usd",
+                "status": "succeeded",
+                "created": 1700000000,
+            },
+            {
+                "id": "pi_2",
+                "object": "payment_intent",
+                "amount": 200,
+                "currency": "usd",
+                "status": "succeeded",
+                "created": 1700000001,
+            },
+            {
+                "id": "pi_3",
+                "object": "payment_intent",
+                "customer": "cus_2",
+                "amount": 300,
+                "currency": "usd",
+                "status": "succeeded",
+                "created": 1700000002,
+            },
+            {
+                "id": "pi_4",
+                "object": "payment_intent",
+                "customer": "cus_missing",
+                "amount": 400,
+                "currency": "usd",
+                "status": "succeeded",
+                "created": 1700000003,
+            },
+        ),
+        "/v1/refunds": _list_payload(),
+        "/v1/customers": _list_payload(
+            _customer(1),
+            {
+                "id": "cus_2",
+                "object": "customer",
+                "created": 1700000300,
+            },
+        ),
+    }
+    output_dir = tmp_path / "export"
+    assert stripe_payments.main(["export", "--output-dir", str(output_dir)]) == 0
+
+    rows = _csv_rows(output_dir, "payments")
+    assert rows[0] == ["编号", "金额", "币种", "状态", "创建时间", "客户邮箱"]
+    assert {row[0]: row[5] for row in rows[1:]} == {
+        "pi_1": "buyer1@example.com",
+        "pi_2": "",
+        "pi_3": "",
+        "pi_4": "",
     }
 
 
