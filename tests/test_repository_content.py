@@ -27,6 +27,9 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 # is defined by the `verify` subparser of `stripe_payments._parser()`.
 STRIPE_VERIFY_COMMAND = "python -m stripe_payments verify"
 STRIPE_EXPORT_COMMAND = "python -m stripe_payments export"
+# Issue #221: the README documents the summary command and its line format.
+STRIPE_SUMMARY_COMMAND = "python -m stripe_payments summary"
+SUMMARY_SAMPLE_LINE = "USD 付款 1,234.57 退款 1.00 净额 1,233.57"
 # Issue #218: the export command takes exactly these `--format` choices.
 EXPORT_FORMATS = ("csv", "json", "both")
 STRIPE_FLAG_RE = re.compile(r"--[a-z][a-z-]*")
@@ -292,6 +295,19 @@ def test_readme_documents_the_export_format_choices():
             f"the README must show {STRIPE_EXPORT_COMMAND!r} "
             f"--format {format_name}"
         )
+
+
+def test_readme_documents_the_summary_command_output():
+    """Issue #221: one currency per line, thousands separators, upper-case."""
+    text = _read(README)
+    assert STRIPE_SUMMARY_COMMAND in text, (
+        f"the README must document {STRIPE_SUMMARY_COMMAND!r}"
+    )
+    # The documented sample is the real line format, so the docs cannot drift
+    # from what `summary` prints.
+    assert SUMMARY_SAMPLE_LINE in text, (
+        f"the README must show the summary line {SUMMARY_SAMPLE_LINE!r}"
+    )
 
 
 def test_live_payment_verification_cannot_run_on_push_or_pull_request():

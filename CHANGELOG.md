@@ -19,6 +19,8 @@
   `live payment verification` 任务。
 - 新增 `功能建议` Issue 模板 `.github/ISSUE_TEMPLATE/feature-request.md`，
   含 `## 想解决的问题` 与 `## 期望的效果` 两节。
+- 新增 `summary` 子命令：按币种逐行打印付款总额、退款总额和净收入，金额带
+  千分位、币种大写。
 
 ## [v0.6.106] - 2026-09-28
 
