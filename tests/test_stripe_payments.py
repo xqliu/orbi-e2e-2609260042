@@ -1167,6 +1167,199 @@ def test_module_summary_currency_fails_without_the_secret():
     assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
 
 
+# Issue #240: `summary --csv` writes the printed summary rows into a CSV file
+# the operator opens in Excel.
+
+SUMMARY_CSV_HEADER = ["币种", "付款", "退款", "净额"]
+SUMMARY_SAMPLE_LINES = [
+    "EUR 付款 10.00 退款 0.00 净额 10.00",
+    "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+]
+
+
+def _summary_csv_file(output_dir, date=EXPORT_DATE):
+    """The dated summary CSV, e.g. ``summary-2026-10-28.csv``."""
+    return output_dir / f"summary-{date}.csv"
+
+
+def _summary_csv_rows(output_dir, date=EXPORT_DATE):
+    return list(
+        csv.reader(
+            _summary_csv_file(output_dir, date).open(
+                newline="", encoding="utf-8"
+            )
+        )
+    )
+
+
+def _summary_lines(printed):
+    """The printed summary rows (the confirmation line is not one)."""
+    return [line for line in printed if line.split()[1:2] == ["付款"]]
+
+
+def test_cli_summary_csv_writes_a_dated_file_next_to_the_printed_lines(
+    live_key, stripe_summary_lists, export_date, tmp_path, capsys
+):
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        ["summary", "--csv", "--output-dir", str(output_dir)]
+    )
+
+    assert exit_code == 0
+    printed = capsys.readouterr().out.splitlines()
+    assert _summary_lines(printed) == SUMMARY_SAMPLE_LINES
+    # The user sees where the file went, like `export` prints its destination.
+    assert printed[-1] == (
+        f"exported summary rows=2 to {_summary_csv_file(output_dir)}"
+    )
+    assert sorted(path.name for path in output_dir.iterdir()) == [
+        f"summary-{EXPORT_DATE}.csv"
+    ]
+    assert _summary_csv_rows(output_dir) == [
+        SUMMARY_CSV_HEADER,
+        ["EUR", "10.00", "0.00", "10.00"],
+        ["USD", "1,234.57", "1.00", "1,233.57"],
+    ]
+
+
+def test_summary_csv_rows_match_the_printed_summary_lines(
+    live_key, stripe_summary_lists, export_date, tmp_path, capsys
+):
+    """Acceptance: the CSV rows and fields are the printed summary result."""
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            ["summary", "--csv", "--output-dir", str(output_dir)]
+        )
+        == 0
+    )
+
+    printed = _summary_lines(capsys.readouterr().out.splitlines())
+    rows = _summary_csv_rows(output_dir)
+    header, data_rows = rows[0], rows[1:]
+    assert len(data_rows) == len(printed)
+    for line, row in zip(printed, data_rows):
+        fields = line.split()
+        # The printed line is ``<币种> 付款 <值> 退款 <值> 净额 <值>``, so the
+        # field labels must be the CSV header and the values the CSV row.
+        assert fields[1::2] == header[1:]
+        assert [fields[0], *fields[2::2]] == row
+
+
+def test_summary_csv_has_one_column_per_summary_field_for_excel(
+    live_key, stripe_summary_lists, export_date, tmp_path
+):
+    """Acceptance: Excel shows 币种/付款/退款/净额 as one column each."""
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            ["summary", "--csv", "--output-dir", str(output_dir)]
+        )
+        == 0
+    )
+
+    rows = _summary_csv_rows(output_dir)
+    assert {len(row) for row in rows} == {len(SUMMARY_CSV_HEADER)}
+    # The thousand separators are quoted, so Excel keeps `1,234.57` in one cell
+    # instead of splitting the amount over two columns.
+    text = _summary_csv_file(output_dir).read_text(encoding="utf-8")
+    assert '"1,234.57"' in text
+
+
+def test_summary_csv_follows_the_currency_filter(
+    live_key, stripe_summary_lists, export_date, tmp_path, capsys
+):
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            [
+                "summary",
+                "--currency",
+                "usd",
+                "--csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    assert _summary_lines(capsys.readouterr().out.splitlines()) == [
+        SUMMARY_SAMPLE_LINES[1]
+    ]
+    assert _summary_csv_rows(output_dir) == [
+        SUMMARY_CSV_HEADER,
+        ["USD", "1,234.57", "1.00", "1,233.57"],
+    ]
+
+
+def test_summary_csv_without_records_writes_only_the_header(
+    live_key, stripe_api, export_date, tmp_path, capsys
+):
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(),
+        "/v1/refunds": _list_payload(),
+    }
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            ["summary", "--csv", "--output-dir", str(output_dir)]
+        )
+        == 0
+    )
+
+    assert capsys.readouterr().out.strip() == (
+        f"exported summary rows=0 to {_summary_csv_file(output_dir)}"
+    )
+    assert _summary_csv_rows(output_dir) == [SUMMARY_CSV_HEADER]
+
+
+def test_summary_without_the_csv_option_writes_no_file(
+    live_key, stripe_summary_lists, tmp_path, capsys
+):
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(["summary", "--output-dir", str(output_dir)]) == 0
+    )
+
+    # The default output is unchanged: the printed lines, no file.
+    assert capsys.readouterr().out.splitlines() == SUMMARY_SAMPLE_LINES
+    assert not output_dir.exists()
+
+
+def test_cli_summary_csv_without_the_secret_creates_nothing(
+    monkeypatch, stripe_api, tmp_path, capsys
+):
+    monkeypatch.delenv(stripe_payments.LIVE_SECRET_KEY_ENV, raising=False)
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            ["summary", "--csv", "--output-dir", str(output_dir)]
+        )
+        == 2
+    )
+
+    assert stripe_payments.LIVE_SECRET_KEY_ENV in capsys.readouterr().err
+    assert not output_dir.exists()
+
+
+def test_summary_help_describes_the_csv_option(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["summary", "--help"])
+
+    assert excinfo.value.code == 0
+    output = capsys.readouterr().out
+    assert "--csv" in output
+    assert "--output-dir" in output
+
+
 # --- refunds-summary (Issue #224) ---------------------------------------
 
 

@@ -379,6 +379,33 @@ def test_readme_documents_the_chinese_csv_header():
     )
 
 
+# Issue #240: `summary --csv` writes the printed rows into a dated CSV file.
+SUMMARY_CSV_SAMPLE_FILE_NAME = "summary-2026-10-28.csv"
+
+
+def test_readme_documents_the_summary_csv_export():
+    """Issue #240: the summary section shows the --csv usage and its file."""
+    body = _readme_subsection(README_SUMMARY_HEADING)
+    assert f"{STRIPE_SUMMARY_COMMAND} --csv" in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show "
+        f"{STRIPE_SUMMARY_COMMAND!r} --csv"
+    )
+    # The documented header row is the one the CSV writer emits, so the docs
+    # cannot drift away from the exported columns.
+    header = ",".join(
+        stripe_payments.EXPORT_HEADERS[column]
+        for column in stripe_payments.SUMMARY_COLUMNS
+    )
+    assert header in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show the summary CSV "
+        f"header row {header!r}"
+    )
+    assert SUMMARY_CSV_SAMPLE_FILE_NAME in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show the dated summary "
+        f"CSV file name {SUMMARY_CSV_SAMPLE_FILE_NAME!r}"
+    )
+
+
 def test_readme_documents_the_refunds_summary_command_output():
     """Issue #224: one month/currency per line, count and amount."""
     text = _read(README)
