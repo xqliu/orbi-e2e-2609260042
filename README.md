@@ -137,6 +137,7 @@ If `pytest` or `stripe` is not installed, `python -m pytest` fails with
 STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --format csv
 STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --format json
 STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --format both
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --customer cus_123 --format csv
 ```
 
 第一行只写 `payments.csv`、`refunds.csv`、`customers.csv`，第二行只写同名的
@@ -145,10 +146,20 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --format bot
 `--limit` 是每次列表请求的条数（1-100，默认 10），所有记录都会被导出。命令打印
 `exported payments=... refunds=... customers=... to export/`。
 
+只导出某个客户时传 `--customer cus_...`（第四行）：Stripe 的 PaymentIntents
+列表按这个 `customer` 过滤，所以 `payments.csv` 每一行都是该客户，并多出一列
+`customer` 记录这个 id；退款列表本身没有 customer 过滤，命令只保留那些
+`payment_intent` 属于该客户付款的退款。不传 `--customer` 时导出的文件与以前完全
+一样（没有 `customer` 列、包含账户全部记录）。`customers.csv` 仍是账户的客户
+列表，不随 `--customer` 收窄。
+
 失败与修复：`--format` 只接受 `csv`、`json`、`both`，填别的值时命令以退出码 2
 结束并报 `argument --format: invalid choice: 'xml' (choose from 'csv', 'json',
-'both')`，此时不会调用 Stripe、也不会创建目录；按提示改成这三档之一再运行。缺少
-`STRIPE_LIVE_SECRET_KEY` 时同样以退出码 2 报出变量名，补上环境变量后重跑。
+'both')`，此时不会调用 Stripe、也不会创建目录；按提示改成这三档之一再运行。
+`--customer` 传空字符串时命令以退出码 2 结束并报
+`error: --customer must not be empty, got ''`，同样不会调用 Stripe、不会创建目录；
+改成真实的 `cus_...` 后重跑。缺少 `STRIPE_LIVE_SECRET_KEY` 时同样以退出码 2
+报出变量名，补上环境变量后重跑。
 
 ### 汇总收入（summary）
 

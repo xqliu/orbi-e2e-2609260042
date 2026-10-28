@@ -15,7 +15,9 @@ that talks to the Stripe API with the operator's live secret key.
   Refunds and Customers and writes them into a directory, so the operator can
   take the data elsewhere.  ``--format csv|json|both`` picks the file types
   (``both`` by default), so an operator who only needs CSV no longer has to
-  delete the JSON files by hand.
+  delete the JSON files by hand.  ``--customer cus_...`` narrows the export to
+  one customer's payments and refunds (``payments.csv`` then carries a
+  ``customer`` column); omitted, the whole account is exported as before.
 * ``python -m stripe_payments summary`` prints the payments total, the refunds
   total and the net income per currency, one currency per line, so a daily
   check does not need the exported CSV files.
@@ -158,45 +160,64 @@ def create_live_charge(
     return stripe.PaymentIntent.create(**params)
 
 
-def _list_all(resource, *, limit: int):
+def _list_all(resource, *, limit: int, params: dict | None = None):
     """Yield every record of a Stripe list, following pagination to the end.
 
     ``limit`` is the page size (Stripe caps one list call at 100); the
     official SDK's ``auto_paging_iter()`` keeps requesting the next page
     (``starting_after`` = last id) until ``has_more`` is false, so no record
-    beyond the first page is dropped.
+    beyond the first page is dropped.  ``params`` are the documented list
+    filters (for example the PaymentIntents list's ``customer``).
     """
-    return resource.list(limit=limit).auto_paging_iter()
+    return resource.list(limit=limit, **(params or {})).auto_paging_iter()
 
 
 def export_data(
-    *, output_dir: str, formats: Sequence[str], limit: int
+    *,
+    output_dir: str,
+    formats: Sequence[str],
+    limit: int,
+    customer: str | None = None,
 ) -> tuple[int, int, int]:
     """Read the three Stripe lists, then write CSV/JSON files for them.
+
+    ``customer`` narrows payments and refunds to one customer (Issue #223).
+    The PaymentIntents list takes a documented ``customer`` filter, so Stripe
+    returns only that customer's payments.  The Refunds list has no
+    ``customer`` filter, so the refunds are narrowed to the ones whose
+    ``payment_intent`` is one of those payments.
 
     Every page of all three lists is fetched before any file is written, so a
     failing Stripe call (anywhere in the pagination) leaves no half-written
     export behind.
     """
     stripe.api_key = live_secret_key()
+    payment_filters = {"customer": customer} if customer else {}
+    payments = list(
+        _list_all(stripe.PaymentIntent, limit=limit, params=payment_filters)
+    )
+    payment_intent_ids = {payment.id for payment in payments}
+    refunds = [
+        refund
+        for refund in _list_all(stripe.Refund, limit=limit)
+        if customer is None or refund.payment_intent in payment_intent_ids
+    ]
     rows = {
         "payments": [
-            _payment_row(payment)
-            for payment in _list_all(stripe.PaymentIntent, limit=limit)
+            _payment_row(payment, customer=customer) for payment in payments
         ],
-        "refunds": [
-            _refund_row(refund)
-            for refund in _list_all(stripe.Refund, limit=limit)
-        ],
+        "refunds": [_refund_row(refund) for refund in refunds],
         "customers": [
-            _customer_row(customer)
-            for customer in _list_all(stripe.Customer, limit=limit)
+            _customer_row(customer_record)
+            for customer_record in _list_all(stripe.Customer, limit=limit)
         ],
     }
 
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
     for category, columns in EXPORT_COLUMNS.items():
+        if category == "payments" and customer is not None:
+            columns = _payment_columns()
         category_rows = rows[category]
         if "csv" in formats:
             _write_csv(directory / f"{category}.csv", columns, category_rows)
@@ -253,14 +274,30 @@ def _created(value: object) -> str:
     )
 
 
-def _payment_row(payment: "stripe.PaymentIntent") -> dict:
-    return {
-        "id": payment.id,
-        "amount": payment.amount,
-        "currency": payment.currency,
-        "status": payment.status,
-        "created": _created(payment.created),
-    }
+def _payment_columns() -> tuple[str, ...]:
+    """The payments columns of a ``--customer`` export: the filter is a column."""
+    columns = EXPORT_COLUMNS["payments"]
+    return (columns[0], "customer") + columns[1:]
+
+
+def _payment_row(
+    payment: "stripe.PaymentIntent", *, customer: str | None = None
+) -> dict:
+    """One payments row; a ``--customer`` export carries that customer id.
+
+    The list itself is filtered by this customer on Stripe's side, so every
+    exported payment belongs to it.
+    """
+    row = {"id": payment.id}
+    if customer is not None:
+        row["customer"] = customer
+    row.update(
+        amount=payment.amount,
+        currency=payment.currency,
+        status=payment.status,
+        created=_created(payment.created),
+    )
+    return row
 
 
 def _refund_row(refund: "stripe.Refund") -> dict:
@@ -360,6 +397,14 @@ def _parser() -> argparse.ArgumentParser:
         default="both",
         help="which files to write (default both)",
     )
+    export.add_argument(
+        "--customer",
+        default=None,
+        help=(
+            "only export this customer's payments and refunds (cus_...); "
+            "omitted, every record is exported"
+        ),
+    )
     return parser
 
 
@@ -402,9 +447,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ConfigurationError(
                 f"--limit must be between 1 and {MAX_LIMIT}, got {args.limit}"
             )
+        if args.customer is not None and not args.customer.strip():
+            raise ConfigurationError(
+                f"--customer must not be empty, got {args.customer!r}"
+            )
         formats = ("csv", "json") if args.format == "both" else (args.format,)
         payments, refunds, customers = export_data(
-            output_dir=args.output_dir, formats=formats, limit=args.limit
+            output_dir=args.output_dir,
+            formats=formats,
+            limit=args.limit,
+            customer=args.customer or None,
         )
         print(
             f"exported payments={payments} refunds={refunds} "

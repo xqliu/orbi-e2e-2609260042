@@ -977,3 +977,206 @@ def test_summary_help_describes_the_command(capsys):
 
     assert excinfo.value.code == 0
     assert "summary" in capsys.readouterr().out
+
+
+# --- export --customer (Issue #223) -------------------------------------
+
+
+@pytest.fixture
+def stripe_customer_lists(stripe_api):
+    """The lists a `--customer cus_1` export reads.
+
+    Stripe filters PaymentIntents server-side by the documented `customer`
+    list parameter, so that list only holds cus_1's payment.  The Refunds
+    list has no `customer` parameter (only `charge` / `payment_intent`, see
+    `stripe.params.RefundListParams`), so it returns every account refund and
+    the command keeps the ones whose payment_intent belongs to cus_1.
+    """
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            {
+                "id": "pi_1",
+                "object": "payment_intent",
+                "customer": "cus_1",
+                "amount": 2500,
+                "currency": "usd",
+                "status": "succeeded",
+                "created": 1700000000,
+            }
+        ),
+        "/v1/refunds": _list_payload(
+            {
+                "id": "re_1",
+                "object": "refund",
+                "payment_intent": "pi_1",
+                "amount": 500,
+                "currency": "usd",
+                "status": "succeeded",
+                "created": 1700000100,
+            },
+            {
+                # Another customer's refund, reached through a payment that
+                # is not in the filtered payment list.
+                "id": "re_2",
+                "object": "refund",
+                "payment_intent": "pi_9",
+                "amount": 900,
+                "currency": "usd",
+                "status": "succeeded",
+                "created": 1700000200,
+            },
+        ),
+        "/v1/customers": _list_payload(_customer(1)),
+    }
+    return stripe_api
+
+
+def _csv_rows(output_dir, name):
+    return list(
+        csv.reader((output_dir / f"{name}.csv").open(newline="", encoding="utf-8"))
+    )
+
+
+def test_cli_export_customer_exports_only_that_customers_payments_and_refunds(
+    live_key, stripe_customer_lists, tmp_path, capsys
+):
+    output_dir = tmp_path / "export"
+    exit_code = stripe_payments.main(
+        ["export", "--output-dir", str(output_dir), "--customer", "cus_1"]
+    )
+
+    assert exit_code == 0
+    assert (
+        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+        in capsys.readouterr().out
+    )
+
+    requests = stripe_customer_lists.requests
+    assert [request["path"] for request in requests] == [
+        "/v1/payment_intents",
+        "/v1/refunds",
+        "/v1/customers",
+    ]
+    # The documented contract: the PaymentIntents list takes `customer`, the
+    # Refunds list does not, so the refunds are narrowed by the payments of
+    # the exported customer instead of an unsupported request parameter.
+    assert requests[0]["form"]["customer"] == ["cus_1"]
+    assert "customer" not in requests[1]["form"]
+    assert requests[1]["form"]["limit"] == ["10"]
+
+    assert _csv_rows(output_dir, "payments") == [
+        ["id", "customer", "amount", "currency", "status", "created"],
+        ["pi_1", "cus_1", "2500", "usd", "succeeded", "2023-11-14T22:13:20Z"],
+    ]
+    # Acceptance: every payments.csv row carries the requested customer id.
+    assert {row[1] for row in _csv_rows(output_dir, "payments")[1:]} == {"cus_1"}
+
+    assert _csv_rows(output_dir, "refunds") == [
+        ["id", "payment_intent", "amount", "currency", "status", "created"],
+        ["re_1", "pi_1", "500", "usd", "succeeded", "2023-11-14T22:15:00Z"],
+    ]
+
+    assert json.loads(
+        (output_dir / "payments.json").read_text(encoding="utf-8")
+    ) == [
+        {
+            "id": "pi_1",
+            "customer": "cus_1",
+            "amount": 2500,
+            "currency": "usd",
+            "status": "succeeded",
+            "created": "2023-11-14T22:13:20Z",
+        }
+    ]
+
+
+def test_export_without_customer_sends_no_customer_parameter_and_keeps_the_columns(
+    live_key, stripe_lists, tmp_path
+):
+    """Not passing --customer keeps the export exactly as it was."""
+    output_dir = tmp_path / "export"
+    assert stripe_payments.main(["export", "--output-dir", str(output_dir)]) == 0
+
+    for request in stripe_lists.requests:
+        assert "customer" not in request["form"]
+
+    assert _csv_rows(output_dir, "payments")[0] == [
+        "id",
+        "amount",
+        "currency",
+        "status",
+        "created",
+    ]
+    assert "customer" not in json.loads(
+        (output_dir / "payments.json").read_text(encoding="utf-8")
+    )[0]
+
+
+def test_export_customer_without_payments_writes_no_payment_and_no_refund(
+    live_key, stripe_api, tmp_path, capsys
+):
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(),
+        "/v1/refunds": _list_payload(_refund_record("re_1", 100, "usd")),
+        "/v1/customers": _list_payload(_customer(1)),
+    }
+    output_dir = tmp_path / "export"
+    exit_code = stripe_payments.main(
+        ["export", "--output-dir", str(output_dir), "--customer", "cus_1"]
+    )
+
+    assert exit_code == 0
+    assert "exported payments=0 refunds=0 customers=1" in capsys.readouterr().out
+    assert _csv_data_rows(output_dir, "payments") == []
+    assert _csv_data_rows(output_dir, "refunds") == []
+
+
+def test_cli_export_rejects_an_empty_customer(live_key, stripe_api, tmp_path, capsys):
+    output_dir = tmp_path / "export"
+    exit_code = stripe_payments.main(
+        ["export", "--output-dir", str(output_dir), "--customer", ""]
+    )
+
+    assert exit_code == 2
+    assert "--customer must not be empty" in capsys.readouterr().err
+    assert stripe_api.requests == []
+    assert not output_dir.exists()
+
+
+def test_export_help_lists_the_customer_option(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["export", "--help"])
+
+    assert excinfo.value.code == 0
+    assert "--customer" in capsys.readouterr().out
+
+
+def test_module_export_accepts_the_customer_option(tmp_path):
+    """The real user entry point: ``python -m stripe_payments export --customer``."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != stripe_payments.LIVE_SECRET_KEY_ENV
+    }
+    output_dir = tmp_path / "export"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "stripe_payments",
+            "export",
+            "--customer",
+            "cus_1",
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+
+    assert result.returncode == 2
+    assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
+    assert not output_dir.exists()
