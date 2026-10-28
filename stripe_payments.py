@@ -17,9 +17,12 @@ that talks to the Stripe API with the operator's live secret key.
   ``payments-2026-10-28.csv`` from one day never overwrites the file exported
   on another day.  ``--format csv|json|both`` picks the file types
   (``both`` by default), so an operator who only needs CSV no longer has to
-  delete the JSON files by hand.  ``--customer cus_...`` narrows the export to
-  one customer's payments and refunds (``payments-<date>.csv`` then carries a
-  ``customer`` column); omitted, the whole account is exported as before.
+  delete the JSON files by hand.  The CSV header row is Chinese (Issue #235),
+  e.g. ``payments-<date>.csv`` starts with
+  ``编号,金额,币种,状态,创建时间``; the JSON keys stay English.
+  ``--customer cus_...`` narrows the export to one customer's payments and
+  refunds (``payments-<date>.csv`` then carries a ``customer`` column, CSV
+  header ``客户``); omitted, the whole account is exported as before.
 * ``python -m stripe_payments summary`` prints the payments total, the refunds
   total and the net income per currency, one currency per line, so a daily
   check does not need the exported CSV files.  ``--currency usd`` prints only
@@ -73,6 +76,21 @@ EXPORT_COLUMNS = {
         "created",
     ),
     "customers": ("id", "email", "created"),
+}
+
+# Issue #235: the CSV header row is written in Chinese, so the operator reads
+# ``编号,金额,币种,状态,创建时间`` in a spreadsheet instead of the internal keys.
+# The JSON files keep the English keys in EXPORT_COLUMNS, so their consumers
+# keep working.
+EXPORT_HEADERS = {
+    "id": "编号",
+    "customer": "客户",
+    "payment_intent": "付款编号",
+    "amount": "金额",
+    "currency": "币种",
+    "status": "状态",
+    "created": "创建时间",
+    "email": "邮箱",
 }
 
 # Stripe keeps amounts in the smallest currency unit, but these currencies have
@@ -367,9 +385,10 @@ def _customer_row(customer: "stripe.Customer") -> dict:
 
 
 def _write_csv(path: Path, columns: Sequence[str], rows: Sequence[dict]) -> None:
+    """Write one CSV file: the Chinese header row (Issue #235) and the rows."""
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writeheader()
+        writer.writerow({column: EXPORT_HEADERS[column] for column in columns})
         writer.writerows(rows)
 
 

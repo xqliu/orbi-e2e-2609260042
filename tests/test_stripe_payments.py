@@ -485,16 +485,18 @@ def test_cli_export_writes_csv_and_json_for_every_category(
         )
         for name in ("payments", "refunds", "customers")
     }
+    # Issue #235: the CSV header row is the Chinese column name the operator
+    # reads in a spreadsheet; the JSON keys stay the English field names.
     assert csv_rows["payments"] == [
-        ["id", "amount", "currency", "status", "created"],
+        ["编号", "金额", "币种", "状态", "创建时间"],
         ["pi_1", "100", "usd", "succeeded", "2023-11-14T22:13:20Z"],
     ]
     assert csv_rows["refunds"] == [
-        ["id", "payment_intent", "amount", "currency", "status", "created"],
+        ["编号", "付款编号", "金额", "币种", "状态", "创建时间"],
         ["re_1", "pi_1", "100", "usd", "succeeded", "2023-11-14T22:15:00Z"],
     ]
     assert csv_rows["customers"] == [
-        ["id", "email", "created"],
+        ["编号", "邮箱", "创建时间"],
         ["cus_1", "buyer@example.com", "2023-11-14T22:16:40Z"],
         ["cus_2", "", "2023-11-14T22:18:20Z"],
     ]
@@ -624,12 +626,44 @@ def test_cli_export_format_both_writes_both_files(
         )
     )
     assert csv_header == [
-        "id",
-        "amount",
-        "currency",
-        "status",
-        "created",
+        "编号",
+        "金额",
+        "币种",
+        "状态",
+        "创建时间",
     ]
+
+
+def test_every_exported_csv_header_is_a_chinese_column_name(
+    live_key, stripe_lists, export_date, tmp_path
+):
+    """Issue #235 Acceptance: the first CSV line is readable Chinese headers.
+
+    The internal column keys stay English so the JSON files keep the field
+    names their consumers already read; only the CSV header row is translated.
+    """
+    output_dir = tmp_path / "export"
+    assert stripe_payments.main(["export", "--output-dir", str(output_dir)]) == 0
+
+    expected_headers = {
+        "payments": ["编号", "金额", "币种", "状态", "创建时间"],
+        "refunds": ["编号", "付款编号", "金额", "币种", "状态", "创建时间"],
+        "customers": ["编号", "邮箱", "创建时间"],
+    }
+    for name, expected in expected_headers.items():
+        rows = _csv_rows(output_dir, name)
+        assert rows[0] == expected
+        # No header cell may fall back to the internal English key (a missed
+        # translation would show up as an ASCII cell).
+        assert all(not cell.isascii() for cell in rows[0]), rows[0]
+
+    # The data rows are unchanged: the same number of rows as the JSON lists.
+    for name in expected_headers:
+        assert len(_csv_rows(output_dir, name)) - 1 == len(
+            json.loads(
+                _export_file(output_dir, name, "json").read_text(encoding="utf-8")
+            )
+        )
 
 
 def test_export_file_names_carry_todays_utc_date(live_key, stripe_lists, tmp_path):
@@ -1364,7 +1398,7 @@ def test_cli_export_customer_exports_only_that_customers_payments_and_refunds(
     assert requests[1]["form"]["limit"] == ["10"]
 
     assert _csv_rows(output_dir, "payments") == [
-        ["id", "customer", "amount", "currency", "status", "created"],
+        ["编号", "客户", "金额", "币种", "状态", "创建时间"],
         ["pi_1", "cus_1", "2500", "usd", "succeeded", "2023-11-14T22:13:20Z"],
     ]
     # Acceptance: every payments.csv row carries the requested customer id, and
@@ -1373,7 +1407,7 @@ def test_cli_export_customer_exports_only_that_customers_payments_and_refunds(
     assert {row[1] for row in _csv_rows(output_dir, "payments")[1:]} == {"cus_1"}
 
     assert _csv_rows(output_dir, "refunds") == [
-        ["id", "payment_intent", "amount", "currency", "status", "created"],
+        ["编号", "付款编号", "金额", "币种", "状态", "创建时间"],
         ["re_1", "pi_1", "500", "usd", "succeeded", "2023-11-14T22:15:00Z"],
     ]
 
@@ -1402,11 +1436,11 @@ def test_export_without_customer_sends_no_customer_parameter_and_keeps_the_colum
         assert "customer" not in request["form"]
 
     assert _csv_rows(output_dir, "payments")[0] == [
-        "id",
-        "amount",
-        "currency",
-        "status",
-        "created",
+        "编号",
+        "金额",
+        "币种",
+        "状态",
+        "创建时间",
     ]
     assert "customer" not in json.loads(
         _export_file(output_dir, "payments", "json").read_text(encoding="utf-8")

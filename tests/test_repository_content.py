@@ -366,6 +366,19 @@ def test_readme_documents_the_summary_currency_filter():
     )
 
 
+def test_readme_documents_the_chinese_csv_header():
+    """Issue #235: the README shows the Chinese header row the export writes."""
+    body = _readme_subsection(README_EXPORT_HEADING)
+    header = ",".join(
+        stripe_payments.EXPORT_HEADERS[column]
+        for column in stripe_payments.EXPORT_COLUMNS["payments"]
+    )
+    assert header in body, (
+        f"the {README_EXPORT_HEADING!r} section must show the exported CSV "
+        f"header row {header!r}"
+    )
+
+
 def test_readme_documents_the_refunds_summary_command_output():
     """Issue #224: one month/currency per line, count and amount."""
     text = _read(README)
