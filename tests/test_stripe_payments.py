@@ -15,6 +15,7 @@ import sys
 import threading
 import urllib.parse
 from datetime import datetime, timezone
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -1021,6 +1022,8 @@ def test_cli_summary_prints_one_formatted_line_per_currency(
         # and an upper-case currency code.
         "EUR 付款 10.00 退款 0.00 净额 10.00",
         "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+        # Issue #243: the printed values add up to one total line.
+        "合计 付款 1,244.57 退款 1.00 净额 1,243.57",
     ]
 
 
@@ -1054,6 +1057,7 @@ def test_summary_totals_every_page(live_key, stripe_api, capsys):
     assert stripe_payments.main(["summary"]) == 0
     assert capsys.readouterr().out.splitlines() == [
         "USD 付款 1,234.57 退款 0.00 净额 1,234.57",
+        "合计 付款 1,234.57 退款 0.00 净额 1,234.57",
     ]
 
 
@@ -1065,6 +1069,7 @@ def test_summary_prints_nothing_when_the_account_has_no_records(
         "/v1/refunds": _list_payload(),
     }
 
+    # No printed currency line means no total line either.
     assert stripe_payments.main(["summary"]) == 0
     assert capsys.readouterr().out == ""
     assert [request["path"] for request in stripe_api.requests] == [
@@ -1093,6 +1098,17 @@ def test_summary_help_describes_the_command(capsys):
     assert "--currency" in output
 
 
+# Issue #243: the command list promises the total line.
+def test_cli_help_lists_the_summary_total_line(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["--help"])
+
+    assert excinfo.value.code == 0
+    # argparse wraps the subcommand help, so compare on collapsed whitespace.
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "one total line adding them up" in help_text
+
+
 # Issue #234: `summary --currency usd` prints only the usd line; omitted, every
 # currency is printed as before.
 def test_cli_summary_currency_prints_only_that_currency_line(
@@ -1101,8 +1117,11 @@ def test_cli_summary_currency_prints_only_that_currency_line(
     exit_code = stripe_payments.main(["summary", "--currency", "usd"])
 
     assert exit_code == 0
+    # Issue #243: the total only adds up the lines actually printed, so the
+    # filtered run shows the usd total, not the all-currency one.
     assert capsys.readouterr().out.splitlines() == [
         "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+        "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
     ]
 
 
@@ -1113,6 +1132,7 @@ def test_cli_summary_currency_is_case_insensitive(
 
     assert capsys.readouterr().out.splitlines() == [
         "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+        "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
     ]
 
 
@@ -1167,6 +1187,75 @@ def test_module_summary_currency_fails_without_the_secret():
     assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
 
 
+# Issue #243: the summary ends with one line adding up the printed currencies.
+SUMMARY_FIELDS = ("付款", "退款", "净额")
+
+
+def _printed_value(line, field):
+    """The printed value after ``field`` in a summary line, e.g. ``1,234.57``."""
+    fields = line.split()
+    return Decimal(fields[fields.index(field) + 1].replace(",", ""))
+
+
+def test_cli_summary_ends_with_the_all_currency_total_line(
+    live_key, stripe_summary_lists, capsys
+):
+    """Acceptance: one extra line at the end of the output shows the total."""
+    assert stripe_payments.main(["summary"]) == 0
+
+    printed = capsys.readouterr().out.splitlines()
+    assert printed[-1] == "合计 付款 1,244.57 退款 1.00 净额 1,243.57"
+
+
+def test_summary_total_equals_the_sum_of_the_printed_currency_values(
+    live_key, stripe_summary_lists, capsys
+):
+    """Acceptance: the total adds up exactly the values printed above it."""
+    assert stripe_payments.main(["summary"]) == 0
+
+    printed = capsys.readouterr().out.splitlines()
+    currency_lines, total_line = printed[:-1], printed[-1]
+    assert total_line.split()[0] == stripe_payments.SUMMARY_TOTAL_LABEL
+    for field in SUMMARY_FIELDS:
+        assert _printed_value(total_line, field) == sum(
+            (_printed_value(line, field) for line in currency_lines),
+            Decimal(0),
+        )
+
+
+def test_summary_total_adds_zero_decimal_currency_values(
+    live_key, stripe_api, capsys
+):
+    """JPY 1,000 prints as 1,000, so the total counts 1,000, not 10.00."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _intent("pi_1", 1000, "jpy"),
+            _intent("pi_2", 123456, "usd"),
+        ),
+        "/v1/refunds": _list_payload(),
+    }
+
+    assert stripe_payments.main(["summary"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "JPY 付款 1,000 退款 0 净额 1,000",
+        "USD 付款 1,234.56 退款 0.00 净额 1,234.56",
+        "合计 付款 2,234.56 退款 0.00 净额 2,234.56",
+    ]
+
+
+def test_summary_total_keeps_a_negative_net(live_key, stripe_api, capsys):
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(_intent("pi_1", 50, "usd")),
+        "/v1/refunds": _list_payload(_refund_record("re_1", 100, "usd")),
+    }
+
+    assert stripe_payments.main(["summary"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "USD 付款 0.50 退款 1.00 净额 -0.50",
+        "合计 付款 0.50 退款 1.00 净额 -0.50",
+    ]
+
+
 # Issue #240: `summary --csv` writes the printed summary rows into a CSV file
 # the operator opens in Excel.
 
@@ -1175,6 +1264,7 @@ SUMMARY_SAMPLE_LINES = [
     "EUR 付款 10.00 退款 0.00 净额 10.00",
     "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
 ]
+SUMMARY_TOTAL_LINE = "合计 付款 1,244.57 退款 1.00 净额 1,243.57"
 
 
 def _summary_csv_file(output_dir, date=EXPORT_DATE):
@@ -1193,8 +1283,13 @@ def _summary_csv_rows(output_dir, date=EXPORT_DATE):
 
 
 def _summary_lines(printed):
-    """The printed summary rows (the confirmation line is not one)."""
-    return [line for line in printed if line.split()[1:2] == ["付款"]]
+    """The printed per-currency rows (the total and confirmation are not rows)."""
+    return [
+        line
+        for line in printed
+        if line.split()[1:2] == ["付款"]
+        and not line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL)
+    ]
 
 
 def test_cli_summary_csv_writes_a_dated_file_next_to_the_printed_lines(
@@ -1209,6 +1304,9 @@ def test_cli_summary_csv_writes_a_dated_file_next_to_the_printed_lines(
     assert exit_code == 0
     printed = capsys.readouterr().out.splitlines()
     assert _summary_lines(printed) == SUMMARY_SAMPLE_LINES
+    # Issue #243: the total line prints after the currency rows, before the
+    # file notice, so the notice stays the last printed line.
+    assert printed[-2] == SUMMARY_TOTAL_LINE
     # The user sees where the file went, like `export` prints its destination.
     assert printed[-1] == (
         f"exported summary rows=2 to {_summary_csv_file(output_dir)}"
@@ -1329,7 +1427,10 @@ def test_summary_without_the_csv_option_writes_no_file(
     )
 
     # The default output is unchanged: the printed lines, no file.
-    assert capsys.readouterr().out.splitlines() == SUMMARY_SAMPLE_LINES
+    assert capsys.readouterr().out.splitlines() == [
+        *SUMMARY_SAMPLE_LINES,
+        SUMMARY_TOTAL_LINE,
+    ]
     assert not output_dir.exists()
 
 

@@ -30,7 +30,9 @@ that talks to the Stripe API with the operator's live secret key.
 * ``python -m stripe_payments summary`` prints the payments total, the refunds
   total and the net income per currency, one currency per line, so a daily
   check does not need the exported CSV files.  ``--currency usd`` prints only
-  that currency's line; omitted, every currency is printed.  ``--csv`` also
+  that currency's line; omitted, every currency is printed.  After the
+  currency rows one all-currency ``合计`` line adds up the printed values
+  above it (Issue #243).  ``--csv`` also
   writes those same rows to ``summary-<date>.csv`` (one column per summary
   field, so a spreadsheet shows them side by side); omitted, the command only
   prints, as before.
@@ -114,6 +116,10 @@ EXPORT_HEADERS = {
 # Issue #240: the summary CSV columns.  A row carries exactly the fields the
 # printed summary line carries, so both come from the same ``_summary_row()``.
 SUMMARY_COLUMNS = ("currency", "payments", "refunds", "net")
+
+# Issue #243: the summary ends with one line adding up the printed currencies,
+# so a daily check reads the grand total instead of adding the lines by hand.
+SUMMARY_TOTAL_LABEL = "合计"
 
 # Stripe keeps amounts in the smallest currency unit, but these currencies have
 # no minor unit: 500 is 500 JPY, not 5.00 JPY (docs.stripe.com/currencies,
@@ -337,9 +343,26 @@ def _format_number(amount: int, currency: str) -> str:
     """Format a Stripe minor-unit amount without the currency code."""
     if currency.lower() in ZERO_DECIMAL_CURRENCIES:
         return f"{amount:,}"
+    return _format_hundredths(amount)
+
+
+def _format_hundredths(amount: int) -> str:
+    """Format an amount in hundredths as ``1,234.56`` (two decimals)."""
     sign = "-" if amount < 0 else ""
     major, minor = divmod(abs(amount), 100)
     return f"{sign}{major:,}.{minor:02d}"
+
+
+def _summary_hundredths(amount: int, currency: str) -> int:
+    """The printed amount in hundredths, so printed currency values add up.
+
+    ``_format_number()`` prints a zero-decimal currency as its integer amount
+    and every other currency divided by 100; hundredths is the unit both
+    printed forms share, so the total line adds up exactly the printed values.
+    """
+    if currency.lower() in ZERO_DECIMAL_CURRENCIES:
+        return amount * 100
+    return amount
 
 
 def format_amount(amount: int, currency: str) -> str:
@@ -363,6 +386,20 @@ def _summary_line(currency: str, payments: int, refunds: int) -> str:
     return (
         f"{row['currency']} 付款 {row['payments']} "
         f"退款 {row['refunds']} 净额 {row['net']}"
+    )
+
+
+def _summary_total_line(payments: int, refunds: int) -> str:
+    """The all-currency total line, e.g. ``合计 付款 1,244.57 退款 1.00 ...``.
+
+    ``payments`` and ``refunds`` are in hundredths (``_summary_hundredths()``),
+    the unit the printed currency values share, so the printed total is exactly
+    the sum of the values printed above it.
+    """
+    return (
+        f"{SUMMARY_TOTAL_LABEL} 付款 {_format_hundredths(payments)} "
+        f"退款 {_format_hundredths(refunds)} "
+        f"净额 {_format_hundredths(payments - refunds)}"
     )
 
 
@@ -502,7 +539,7 @@ def _parser() -> argparse.ArgumentParser:
         "summary",
         help=(
             "print payments, refunds and net income totals per currency, "
-            "one currency per line"
+            "one currency per line, then one total line adding them up"
         ),
     )
     summary.add_argument(
@@ -612,12 +649,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                     )
             totals = summarize_data()
             rows = []
+            total_payments = 0
+            total_refunds = 0
             for code in sorted(totals):
                 if currency is not None and code != currency:
                     continue
                 payments, refunds = totals[code]
                 print(_summary_line(code, payments, refunds))
                 rows.append(_summary_row(code, payments, refunds))
+                total_payments += _summary_hundredths(payments, code)
+                total_refunds += _summary_hundredths(refunds, code)
+            if rows:
+                # Issue #243: the extra last row adds up the printed values.
+                print(_summary_total_line(total_payments, total_refunds))
             if args.csv:
                 path = write_summary_csv(rows, output_dir=args.output_dir)
                 print(f"exported summary rows={len(rows)} to {path}")
