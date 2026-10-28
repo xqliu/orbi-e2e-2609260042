@@ -350,10 +350,35 @@ EUR 付款 500.00 退款 0.00 净额 500.00
 币种」行取净额最大的 N 行）和 `--csv`（CSV 只写选中的行）都可以和 `--top` 一起用。
 不传 `--top` 时输出与以前完全一致。
 
+只想看最近 30 天的付款和退款时加 `--days N`：
+
+```sh
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary --days 30
+```
+
+只统计创建时间（`created`，UTC）在最近 N×24 小时内的付款和退款，更早的记录不参与
+计算；时间窗从运行时刻往前推 N×24 小时，恰好落在边界上的记录（`created` 等于
+截止时刻）仍算在窗口内。窗口通过 Stripe 列表的 `created[gte]` 过滤参数下推，所以
+只读取这一时间段的记录。行格式与不加 `--days` 时完全相同，`合计` 行只加总窗口内
+打印出来的行。例如最近 30 天有一笔 usd 付款 1,234.57、一笔 usd 退款 1.00 和一笔
+eur 付款 10.00，而 31 天前还有一笔 usd 付款 99.99 时，输出是：
+
+```
+EUR 付款 10.00 退款 0.00 净额 10.00
+USD 付款 1,234.57 退款 1.00 净额 1,233.57
+合计 付款 1,244.57 退款 1.00 净额 1,243.57
+```
+
+`--days` 可以和 `--by-month`（只对窗口内的记录分月）、`--currency`、`--quiet`、
+`--top` 和 `--csv` 一起用，它们都只看到窗口内的记录。不传 `--days` 时输出与以前
+完全一致。
+
 失败与修复：`--currency` 传空字符串时命令以退出码 2 结束并报
 `error: --currency must not be empty, got ''`，此时不会调用 Stripe；改成真实币种
 代码（如 `usd`）后重跑。`--top` 传 0 或负数时同样以退出码 2 结束并报
 `error: --top must be positive, got 0`，改成正整数（如 `--top 2`）后重跑。
+`--days` 传 0 或负数时同样以退出码 2 结束并报
+`error: --days must be positive, got 0`，改成正整数（如 `--days 30`）后重跑。
 缺少 `STRIPE_LIVE_SECRET_KEY` 时命令以退出码 2 结束并报
 `error: STRIPE_LIVE_SECRET_KEY is not set...`，补上环境变量后重跑；密钥失效时
 报 Stripe 的 `HTTP 401`，轮换环境 secret 后重跑。加上 `--csv` 时，这些失败都发生在
