@@ -286,6 +286,10 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary --by-month 
 2026-10,USD,"1,234.57",1.00,"1,233.57"
 ```
 
+文件与不加 `--by-month` 时同名（`summary-<date>.csv`，默认写到 `export/`），只是表头
+多一列，所以同一天先跑 `summary --csv` 再跑 `summary --by-month --csv`（或反过来）
+会用另一种表头覆盖同名文件；想同时留两份就传不同的 `--output-dir`。
+
 不传 `--by-month` 时输出与以前完全一致（每个币种一行 + 合计行）。
 
 失败与修复：`--currency` 传空字符串时命令以退出码 2 结束并报
