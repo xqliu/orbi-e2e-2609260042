@@ -30,6 +30,9 @@
 
 ### 变更
 
+- `export` 子命令导出的 CSV 第一行改成中文列名：`payments-<日期>.csv` 是
+  `编号,金额,币种,状态,创建时间`（`refunds-<日期>.csv`、
+  `customers-<日期>.csv` 同样为中文）；JSON 的 key 保持英文。
 - `export` 子命令写出的文件名带上导出当天的 UTC 日期，例如
   `payments-2026-10-28.csv`，不同天导出的文件不再互相覆盖。
 
