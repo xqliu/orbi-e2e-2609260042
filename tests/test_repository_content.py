@@ -34,19 +34,19 @@ SUMMARY_SAMPLE_LINE = "USD 付款 1,234.57 退款 1.00 净额 1,233.57"
 SUMMARY_TOTAL_SAMPLE_LINE = "合计 付款 1,244.57 退款 1.00 净额 1,243.57"
 # Issue #224: the README documents the refunds-summary command and its line format.
 STRIPE_REFUNDS_SUMMARY_COMMAND = "python -m stripe_payments refunds-summary"
-REFUNDS_SUMMARY_SAMPLE_LINE = "2026-10 usd 退款 2 笔 3.50"
+REFUNDS_SUMMARY_SAMPLE_LINE = "2026-W44 usd 退款 2 笔 3.50"
 # Issue #225: the refunds-summary usage sits next to the export and summary
 # sections and shows the complete output the command prints.
 README_EXPORT_HEADING = "### 导出付款数据（export）"
 README_SUMMARY_HEADING = "### 汇总收入（summary）"
-README_REFUNDS_SUMMARY_HEADING = "### 按月汇总退款（refunds-summary）"
-# The sample data the README section describes: 9 月一笔 usd 0.50，10 月一笔
-# eur 1.00 加两笔 usd 1.00、2.50。The expected lines are rendered through the
-# real `_refund_month_line()` below, so the docs cannot drift from the output.
+README_REFUNDS_SUMMARY_HEADING = "### 按周汇总退款（refunds-summary）"
+# The sample data the README section describes: ISO 第 40 周一笔 usd 0.50，第 44 周
+# 一笔 eur 1.00 加两笔 usd 1.00、2.50。The expected lines are rendered through the
+# real `_refund_week_line()` below, so the docs cannot drift from the output.
 REFUNDS_SUMMARY_SAMPLE_DATA = (
-    ("2026-09", "usd", 1, 50),
-    ("2026-10", "eur", 1, 100),
-    ("2026-10", "usd", 2, 350),
+    ("2026-W40", "usd", 1, 50),
+    ("2026-W44", "eur", 1, 100),
+    ("2026-W44", "usd", 2, 350),
 )
 # Issue #218: the export command takes exactly these `--format` choices.
 EXPORT_FORMATS = ("csv", "json", "both")
@@ -487,7 +487,7 @@ def test_readme_documents_the_by_month_csv_month_column():
 
 
 def test_readme_documents_the_refunds_summary_command_output():
-    """Issue #224: one month/currency per line, count and amount."""
+    """Issue #224/#249: one ISO week/currency per line, count and amount."""
     text = _read(README)
     assert STRIPE_REFUNDS_SUMMARY_COMMAND in text, (
         f"the README must document {STRIPE_REFUNDS_SUMMARY_COMMAND!r}"
@@ -542,11 +542,11 @@ def test_readme_shows_the_complete_refunds_summary_output():
     """Issue #225: the section shows the complete output, in the real order."""
     body = _readme_subsection(README_REFUNDS_SUMMARY_HEADING)
     expected = "\n".join(
-        stripe_payments._refund_month_line(month, currency, count, amount)
-        for month, currency, count, amount in REFUNDS_SUMMARY_SAMPLE_DATA
+        stripe_payments._refund_week_line(week, currency, count, amount)
+        for week, currency, count, amount in REFUNDS_SUMMARY_SAMPLE_DATA
     )
     # The whole block is documented verbatim, so the reader sees every line in
-    # the documented (month, currency) sort order instead of a single sample.
+    # the documented (week, currency) sort order instead of a single sample.
     assert expected in body, (
         f"the {README_REFUNDS_SUMMARY_HEADING!r} section must show the "
         f"complete output of {STRIPE_REFUNDS_SUMMARY_COMMAND!r}, got:\n{body}"
