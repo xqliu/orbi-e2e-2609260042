@@ -23,6 +23,10 @@
   千分位、币种大写。
 - `export` 子命令新增 `--customer cus_...`：只导出该客户的付款和退款，
   `payments.csv` 多出一列 `customer`；不传时导出内容与以前一致。
+- `export` 子命令新增 `--email <邮箱>`：只导出该邮箱客户的记录，
+  `payments`、`refunds`、`customers` 三个导出文件都只含这些客户的记录；
+  邮箱按 Stripe Customers 列表的精确过滤匹配，找不到时报出该邮箱并以退出码 2 结束，
+  不写任何文件。
 - 新增 `refunds-summary` 子命令：按月份和币种逐行打印退款笔数与退款金额，
   例如 `2026-10 usd 退款 2 笔 3.50`。
 - `summary` 子命令新增 `--currency usd`：输出只包含该币种那一行；不传时和

@@ -138,6 +138,7 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --format csv
 STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --format json
 STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --format both
 STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --customer cus_123 --format csv
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --email buyer@example.com --format csv
 ```
 
 第一行只写 `payments-2026-10-28.csv`、`refunds-2026-10-28.csv`、
@@ -168,12 +169,27 @@ id）；退款列表本身没有 customer 过滤，命令只保留那些
 （`客户邮箱` 列始终存在），导出账户全部记录。`customers-<日期>.csv` 仍是账户的
 客户列表，不随 `--customer` 收窄。
 
+只导出某个客户邮箱的记录时传 `--email buyer@example.com`（第五行）：Stripe 的
+Customers 列表按文档化的 `email` 条件过滤（精确匹配，大小写敏感），所以
+`customers-<日期>.csv` 只剩这个邮箱的客户；再按这些客户的 `cus_...` 用
+PaymentIntents 列表的 `customer` 条件读取付款，退款同样只保留 `payment_intent`
+属于这些付款的记录。`payments-<日期>.csv` 保持原来的列（不因 `--email` 多出
+`客户` 列），每行 `客户邮箱` 都是传入的地址。`--email` 与 `--customer` 二选一，
+同时给出时命令直接报错。
+
 失败与修复：`--format` 只接受 `csv`、`json`、`both`，填别的值时命令以退出码 2
 结束并报 `argument --format: invalid choice: 'xml' (choose from 'csv', 'json',
 'both')`，此时不会调用 Stripe、也不会创建目录；按提示改成这三档之一再运行。
 `--customer` 传空字符串时命令以退出码 2 结束并报
 `error: --customer must not be empty, got ''`，同样不会调用 Stripe、不会创建目录；
-改成真实的 `cus_...` 后重跑。缺少 `STRIPE_LIVE_SECRET_KEY` 时同样以退出码 2
+改成真实的 `cus_...` 后重跑。`--email` 传空字符串时报
+`error: --email must not be empty, got ''`；邮箱在 Stripe 里找不到（或大小写和
+Stripe 里的不一致）时命令以退出码 2 结束并报
+`error: no Stripe customer has the email 'nobody@example.com'; the Customers list's email filter is an exact match, so copy the address from the Stripe dashboard and re-run`，
+此时只查了一次 Customers 列表、没有写任何文件；按 Stripe Dashboard 里的拼写
+重跑即可。`--email` 和 `--customer` 同时给出时报
+`error: --email and --customer cannot be combined: pass the customer's email or its cus_... id, not both`，
+去掉其中一个再运行。缺少 `STRIPE_LIVE_SECRET_KEY` 时同样以退出码 2
 报出变量名，补上环境变量后重跑。
 
 ### 汇总收入（summary）

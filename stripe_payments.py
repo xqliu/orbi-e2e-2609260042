@@ -27,6 +27,13 @@ that talks to the Stripe API with the operator's live secret key.
   ``--customer cus_...`` narrows the export to one customer's payments and
   refunds (``payments-<date>.csv`` then also carries a ``customer`` column,
   CSV header ``客户``); omitted, the whole account is exported as before.
+  ``--email <address>`` narrows the whole export to the customer(s) with that
+  email instead (Issue #247): the Customers list takes Stripe's documented,
+  exact ``email`` filter, so ``customers-<date>.csv`` carries only the
+  matching customer(s), the payments are read with the documented
+  ``customer`` filter of each of them and the refunds are narrowed like
+  ``--customer`` does.  An address that matches no customer fails with a
+  message naming it instead of writing an empty export.
 * ``python -m stripe_payments summary`` prints the payments total, the refunds
   total and the net income per currency, one currency per line, so a daily
   check does not need the exported CSV files.  ``--currency usd`` prints only
@@ -236,6 +243,7 @@ def export_data(
     formats: Sequence[str],
     limit: int,
     customer: str | None = None,
+    email: str | None = None,
 ) -> tuple[int, int, int]:
     """Read the three Stripe lists, then write CSV/JSON files for them.
 
@@ -245,23 +253,58 @@ def export_data(
     ``customer`` filter, so the refunds are narrowed to the ones whose
     ``payment_intent`` is one of those payments.
 
+    ``email`` narrows the whole export to the customer(s) with that address
+    (Issue #247).  The Customers list takes Stripe's documented ``email``
+    filter (an exact match), so the customers file carries only the matching
+    customer(s).  Stripe does not require an email to be unique, so the filter
+    can return more than one customer; the PaymentIntents list takes a single
+    ``customer``, so each matched customer's payments are read with it and the
+    refunds are narrowed to that union, like ``--customer`` does.  No matching
+    customer is reported instead of writing an empty export, because the exact
+    filter turns a typo into an empty list rather than an error.
+
     Every page of all three lists is fetched before any file is written, so a
     failing Stripe call (anywhere in the pagination) leaves no half-written
     export behind.  The files are named after the export date (Issue #230),
     e.g. ``payments-2026-10-28.csv``, so exports from different days coexist.
     """
     stripe.api_key = live_secret_key()
-    payment_filters = {"customer": customer} if customer else {}
-    payments = list(
-        _list_all(stripe.PaymentIntent, limit=limit, params=payment_filters)
-    )
+    narrowed = customer is not None or email is not None
+    if email is not None:
+        customers = list(
+            _list_all(stripe.Customer, limit=limit, params={"email": email})
+        )
+        if not customers:
+            raise ConfigurationError(
+                f"no Stripe customer has the email {email!r}; the Customers "
+                f"list's email filter is an exact match, so copy the address "
+                f"from the Stripe dashboard and re-run"
+            )
+        payments = [
+            payment
+            for customer_record in customers
+            for payment in _list_all(
+                stripe.PaymentIntent,
+                limit=limit,
+                params={"customer": customer_record.id},
+            )
+        ]
+    else:
+        # ``None`` means "not filtered by email": the Customers list is read
+        # after the refunds, the order the whole-account export always used.
+        customers = None
+        payment_filters = {"customer": customer} if customer else {}
+        payments = list(
+            _list_all(stripe.PaymentIntent, limit=limit, params=payment_filters)
+        )
     payment_intent_ids = {payment.id for payment in payments}
     refunds = [
         refund
         for refund in _list_all(stripe.Refund, limit=limit)
-        if customer is None or refund.payment_intent in payment_intent_ids
+        if not narrowed or refund.payment_intent in payment_intent_ids
     ]
-    customers = list(_list_all(stripe.Customer, limit=limit))
+    if customers is None:
+        customers = list(_list_all(stripe.Customer, limit=limit))
     # Issue #239: the payments CSV shows who paid.  The Customers list is
     # already read for the customers export, so the email column reuses it:
     # ``{customer id: email}`` maps each payment's documented ``customer`` id
@@ -662,6 +705,15 @@ def _parser() -> argparse.ArgumentParser:
             "omitted, every record is exported"
         ),
     )
+    export.add_argument(
+        "--email",
+        default=None,
+        help=(
+            "only export the records of the customer(s) with this email "
+            "(an exact match, like Stripe's customer email filter; cannot be "
+            "combined with --customer); omitted, every record is exported"
+        ),
+    )
     return parser
 
 
@@ -740,12 +792,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ConfigurationError(
                 f"--customer must not be empty, got {args.customer!r}"
             )
+        if args.email is not None and not args.email.strip():
+            raise ConfigurationError(
+                f"--email must not be empty, got {args.email!r}"
+            )
+        if args.customer is not None and args.email is not None:
+            raise ConfigurationError(
+                "--email and --customer cannot be combined: pass the "
+                "customer's email or its cus_... id, not both"
+            )
         formats = ("csv", "json") if args.format == "both" else (args.format,)
         payments, refunds, customers = export_data(
             output_dir=args.output_dir,
             formats=formats,
             limit=args.limit,
             customer=args.customer or None,
+            email=args.email or None,
         )
         print(
             f"exported payments={payments} refunds={refunds} "

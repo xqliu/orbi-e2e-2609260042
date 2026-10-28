@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import stripe
@@ -2212,6 +2213,375 @@ def test_module_export_accepts_the_customer_option(tmp_path):
             "export",
             "--customer",
             "cus_1",
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+
+    assert result.returncode == 2
+    assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
+    assert not output_dir.exists()
+
+
+# --- export --email (Issue #247) ----------------------------------------
+
+
+@pytest.fixture
+def stripe_email_lists(stripe_api):
+    """The lists an `export --email buyer1@example.com` export reads.
+
+    ``stripe.params.CustomerListParams`` documents an ``email`` filter ("A
+    case-sensitive filter on the list based on the customer's `email` field"),
+    so the Customers list returns only that address's customer.  The
+    PaymentIntents list has no ``email`` filter, only ``customer``
+    (``stripe.params.PaymentIntentListParams``), so the payments are read with
+    the id the email resolved to.  The Refunds list has neither filter
+    (``stripe.params.RefundListParams``: ``charge`` / ``payment_intent``), so
+    it returns every account refund and the command keeps the ones whose
+    ``payment_intent`` belongs to those payments.
+    """
+    stripe_api.list_payloads = {
+        "/v1/customers": _list_payload(_customer(1)),
+        "/v1/payment_intents": _list_payload(
+            {
+                "id": "pi_1",
+                "object": "payment_intent",
+                "customer": "cus_1",
+                "amount": 2500,
+                "currency": "usd",
+                "status": "succeeded",
+                "created": 1700000000,
+            }
+        ),
+        "/v1/refunds": _list_payload(
+            {
+                "id": "re_1",
+                "object": "refund",
+                "payment_intent": "pi_1",
+                "amount": 500,
+                "currency": "usd",
+                "status": "succeeded",
+                "created": 1700000100,
+            },
+            {
+                # Another customer's refund, reached through a payment that is
+                # not in the filtered payment list.
+                "id": "re_2",
+                "object": "refund",
+                "payment_intent": "pi_9",
+                "amount": 900,
+                "currency": "usd",
+                "status": "succeeded",
+                "created": 1700000200,
+            },
+        ),
+    }
+    return stripe_api
+
+
+def test_cli_export_email_exports_only_that_customers_records(
+    live_key, stripe_email_lists, export_date, tmp_path, capsys
+):
+    """Acceptance: `export --email` keeps only that address's records."""
+    output_dir = tmp_path / "export"
+    exit_code = stripe_payments.main(
+        [
+            "export",
+            "--output-dir",
+            str(output_dir),
+            "--email",
+            "buyer1@example.com",
+        ]
+    )
+
+    assert exit_code == 0
+    assert (
+        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+        in capsys.readouterr().out
+    )
+
+    requests = stripe_email_lists.requests
+    assert [request["path"] for request in requests] == [
+        "/v1/customers",
+        "/v1/payment_intents",
+        "/v1/refunds",
+    ]
+    # The documented contract: the Customers list filters by `email`, the
+    # PaymentIntents list by `customer`, the Refunds list by neither.
+    assert requests[0]["form"]["email"] == ["buyer1@example.com"]
+    assert requests[0]["form"]["limit"] == ["10"]
+    assert requests[1]["form"]["customer"] == ["cus_1"]
+    assert "email" not in requests[1]["form"]
+    assert "customer" not in requests[2]["form"]
+    assert "email" not in requests[2]["form"]
+
+    # The payments keep the usual columns (no 客户 column for --email) and
+    # every row belongs to the requested address.
+    assert _csv_rows(output_dir, "payments") == [
+        ["编号", "金额", "币种", "状态", "创建时间", "客户邮箱"],
+        [
+            "pi_1",
+            "2500",
+            "usd",
+            "succeeded",
+            "2023-11-14T22:13:20Z",
+            "buyer1@example.com",
+        ],
+    ]
+    assert {row[5] for row in _csv_rows(output_dir, "payments")[1:]} == {
+        "buyer1@example.com"
+    }
+
+    # Only the refunds of that customer's payments, and only that customer.
+    assert _csv_rows(output_dir, "refunds")[1:] == [
+        ["re_1", "pi_1", "500", "usd", "succeeded", "2023-11-14T22:15:00Z"]
+    ]
+    assert _csv_rows(output_dir, "customers")[1:] == [
+        ["cus_1", "buyer1@example.com", "2023-11-14T22:16:41Z"]
+    ]
+
+    assert json.loads(
+        _export_file(output_dir, "payments", "json").read_text(encoding="utf-8")
+    ) == [
+        {
+            "id": "pi_1",
+            "amount": 2500,
+            "currency": "usd",
+            "status": "succeeded",
+            "created": "2023-11-14T22:13:20Z",
+            "customer_email": "buyer1@example.com",
+        }
+    ]
+
+
+def test_export_email_narrows_to_every_customer_with_that_address(
+    live_key, monkeypatch, export_date, tmp_path
+):
+    """A shared address exports every matching customer (Stripe emails are not unique).
+
+    The Customers ``email`` filter can return more than one customer while the
+    PaymentIntents list only takes a single ``customer``, so the export reads
+    each matched customer's payments and narrows the refunds to that union.
+    The lists are faked here because the wire contract of the single-customer
+    case is asserted against the real SDK above.
+    """
+    customer_1 = SimpleNamespace(
+        id="cus_1", email="buyer@example.com", created=1700000000
+    )
+    customer_2 = SimpleNamespace(
+        id="cus_2", email="buyer@example.com", created=1700000001
+    )
+    payments = {
+        "cus_1": SimpleNamespace(
+            id="pi_1",
+            customer="cus_1",
+            amount=100,
+            currency="usd",
+            status="succeeded",
+            created=1700000100,
+        ),
+        "cus_2": SimpleNamespace(
+            id="pi_2",
+            customer="cus_2",
+            amount=200,
+            currency="usd",
+            status="succeeded",
+            created=1700000101,
+        ),
+    }
+    refunds = [
+        SimpleNamespace(
+            id=identifier,
+            payment_intent=payment_intent,
+            amount=amount,
+            currency="usd",
+            status="succeeded",
+            created=1700000200,
+        )
+        for identifier, payment_intent, amount in (
+            ("re_1", "pi_1", 10),
+            ("re_2", "pi_2", 20),
+            ("re_9", "pi_9", 90),
+        )
+    ]
+    calls = []
+
+    def fake_list_all(resource, *, limit, params=None):
+        calls.append((resource, dict(params or {})))
+        if resource is stripe.Customer:
+            return iter([customer_1, customer_2])
+        if resource is stripe.PaymentIntent:
+            return iter([payments[params["customer"]]])
+        return iter(refunds)
+
+    monkeypatch.setattr(stripe_payments, "_list_all", fake_list_all)
+
+    output_dir = tmp_path / "export"
+    counts = stripe_payments.export_data(
+        output_dir=str(output_dir),
+        formats=("csv",),
+        limit=10,
+        email="buyer@example.com",
+    )
+
+    assert counts == (2, 2, 2)
+    assert calls == [
+        (stripe.Customer, {"email": "buyer@example.com"}),
+        (stripe.PaymentIntent, {"customer": "cus_1"}),
+        (stripe.PaymentIntent, {"customer": "cus_2"}),
+        (stripe.Refund, {}),
+    ]
+    assert [row[0] for row in _csv_rows(output_dir, "payments")[1:]] == [
+        "pi_1",
+        "pi_2",
+    ]
+    assert [row[0] for row in _csv_rows(output_dir, "refunds")[1:]] == [
+        "re_1",
+        "re_2",
+    ]
+    assert [row[0] for row in _csv_rows(output_dir, "customers")[1:]] == [
+        "cus_1",
+        "cus_2",
+    ]
+
+
+def test_export_without_email_sends_no_email_filter(
+    live_key, stripe_lists, export_date, tmp_path
+):
+    """Not passing --email keeps the whole-account export as before."""
+    output_dir = tmp_path / "export"
+    assert stripe_payments.main(["export", "--output-dir", str(output_dir)]) == 0
+
+    for request in stripe_lists.requests:
+        assert "email" not in request["form"]
+    assert len(_csv_data_rows(output_dir, "customers")) == 2
+
+
+def test_cli_export_email_unknown_address_fails_before_writing_files(
+    live_key, stripe_api, tmp_path, capsys
+):
+    """A typo must be reported, not silently exported as an empty account.
+
+    Stripe's ``email`` filter is an exact, case-sensitive match, so an address
+    that matches no customer returns an empty list instead of an error.
+    """
+    stripe_api.list_payloads = {"/v1/customers": _list_payload()}
+    output_dir = tmp_path / "export"
+    exit_code = stripe_payments.main(
+        [
+            "export",
+            "--output-dir",
+            str(output_dir),
+            "--email",
+            "nobody@example.com",
+        ]
+    )
+
+    assert exit_code == 2
+    assert (
+        "no Stripe customer has the email 'nobody@example.com'"
+        in capsys.readouterr().err
+    )
+    # Only the customer lookup ran; no payment/refund request and no file.
+    assert [request["path"] for request in stripe_api.requests] == [
+        "/v1/customers"
+    ]
+    assert stripe_api.requests[0]["form"]["email"] == ["nobody@example.com"]
+    assert not output_dir.exists()
+
+
+def test_cli_export_email_with_only_the_filtered_customer_file(
+    live_key, stripe_api, export_date, tmp_path
+):
+    """The customers file follows the email filter instead of the whole account."""
+    stripe_api.list_payloads = {
+        "/v1/customers": _list_payload(_customer(2)),
+        "/v1/payment_intents": _list_payload(),
+        "/v1/refunds": _list_payload(),
+    }
+    output_dir = tmp_path / "export"
+    assert (
+        stripe_payments.main(
+            [
+                "export",
+                "--output-dir",
+                str(output_dir),
+                "--email",
+                "buyer2@example.com",
+            ]
+        )
+        == 0
+    )
+
+    assert _csv_rows(output_dir, "customers")[1:] == [
+        ["cus_2", "buyer2@example.com", "2023-11-14T22:16:42Z"]
+    ]
+
+
+def test_cli_export_rejects_an_empty_email(live_key, stripe_api, tmp_path, capsys):
+    output_dir = tmp_path / "export"
+    exit_code = stripe_payments.main(
+        ["export", "--output-dir", str(output_dir), "--email", ""]
+    )
+
+    assert exit_code == 2
+    assert "--email must not be empty" in capsys.readouterr().err
+    assert stripe_api.requests == []
+    assert not output_dir.exists()
+
+
+def test_cli_export_rejects_email_and_customer_together(
+    live_key, stripe_api, tmp_path, capsys
+):
+    output_dir = tmp_path / "export"
+    exit_code = stripe_payments.main(
+        [
+            "export",
+            "--output-dir",
+            str(output_dir),
+            "--email",
+            "buyer1@example.com",
+            "--customer",
+            "cus_1",
+        ]
+    )
+
+    assert exit_code == 2
+    error = capsys.readouterr().err
+    assert "--email" in error and "--customer" in error
+    assert stripe_api.requests == []
+    assert not output_dir.exists()
+
+
+def test_export_help_lists_the_email_option(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["export", "--help"])
+
+    assert excinfo.value.code == 0
+    assert "--email" in capsys.readouterr().out
+
+
+def test_module_export_accepts_the_email_option(tmp_path):
+    """The real user entry point: ``python -m stripe_payments export --email``."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != stripe_payments.LIVE_SECRET_KEY_ENV
+    }
+    output_dir = tmp_path / "export"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "stripe_payments",
+            "export",
+            "--email",
+            "buyer@example.com",
             "--output-dir",
             str(output_dir),
         ],
