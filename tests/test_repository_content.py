@@ -516,6 +516,35 @@ def test_readme_documents_the_summary_quiet_option():
     )
 
 
+# Issue #262: `summary --top 2` prints only the two largest net currencies.
+# The sample data is the README's `--top` block, rendered through the real line
+# helpers below, so the docs cannot drift from the output.
+TOP_SAMPLE_DATA = (("usd", 123457, 100), ("eur", 50000, 0))
+
+
+def test_readme_documents_the_summary_top_option():
+    """Issue #262: the summary section shows the --top usage and its output."""
+    body = _readme_subsection(README_SUMMARY_HEADING)
+    assert "--top" in _subparser_option_strings("summary"), (
+        "the summary subparser must define --top"
+    )
+    assert f"{STRIPE_SUMMARY_COMMAND} --top 2" in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show "
+        f"{STRIPE_SUMMARY_COMMAND!r} --top 2"
+    )
+    expected = "\n".join(
+        stripe_payments._summary_line(currency, payments, refunds)
+        for currency, payments, refunds in TOP_SAMPLE_DATA
+    ) + "\n" + stripe_payments._summary_total_line(
+        sum(payments for _, payments, _ in TOP_SAMPLE_DATA),
+        sum(refunds for _, _, refunds in TOP_SAMPLE_DATA),
+    )
+    assert expected in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show the complete "
+        f"`summary --top 2` output, got:\n{body}"
+    )
+
+
 def test_readme_documents_the_refunds_summary_command_output():
     """Issue #224/#249: one ISO week/currency per line, count and amount."""
     text = _read(README)

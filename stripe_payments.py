@@ -45,7 +45,9 @@ that talks to the Stripe API with the operator's live secret key.
   field, so a spreadsheet shows them side by side); omitted, the command only
   prints, as before.  ``--quiet`` prints only the net total per currency
   (``USD 1,233.57``), one line per currency, so a script reads the net income
-  without parsing the payments and refunds columns (Issue #260).
+  without parsing the payments and refunds columns (Issue #260).  ``--top N``
+  prints only the N currencies with the largest net total, largest first
+  (Issue #262).
 * ``python -m stripe_payments refunds-summary`` prints the refund count and
   amount per ISO week and currency, one line per week and currency, so the
   refunds of a week can be read without filtering the exported CSV files.
@@ -499,6 +501,18 @@ def _summary_line(
     )
 
 
+def _summary_net_hundredths(currency: str, payments: int, refunds: int) -> int:
+    """The printed net total in hundredths, the unit currencies share.
+
+    ``--top`` orders currencies by this value (Issue #262), so a zero-decimal
+    currency such as JPY compares with the value the summary prints next to
+    it, the same unit the ``合计`` total line adds.
+    """
+    return _summary_hundredths(payments, currency) - _summary_hundredths(
+        refunds, currency
+    )
+
+
 def _summary_net_line(
     currency: str, payments: int, refunds: int, *, month: str | None = None
 ) -> str:
@@ -703,6 +717,16 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     summary.add_argument(
+        "--top",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "only print the N currencies with the largest net total, largest "
+            "first; omitted, every currency is printed"
+        ),
+    )
+    summary.add_argument(
         "--csv",
         action="store_true",
         help=(
@@ -808,15 +832,31 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise ConfigurationError(
                         f"--currency must not be empty, got {args.currency!r}"
                     )
+            if args.top is not None and args.top < 1:
+                raise ConfigurationError(
+                    f"--top must be positive, got {args.top}"
+                )
             totals = summarize_data(by_month=args.by_month)
-            rows = []
-            total_payments = 0
-            total_refunds = 0
+            entries = []
             for key in sorted(totals):
                 month, code = key if args.by_month else (None, key)
                 if currency is not None and code != currency:
                     continue
                 payments, refunds = totals[key]
+                entries.append((month, code, payments, refunds))
+            if args.top is not None:
+                # Issue #262: keep the N largest net totals, largest first;
+                # equal nets keep the sorted month/currency order.
+                entries = sorted(
+                    entries,
+                    key=lambda entry: -_summary_net_hundredths(
+                        entry[1], entry[2], entry[3]
+                    ),
+                )[: args.top]
+            rows = []
+            total_payments = 0
+            total_refunds = 0
+            for month, code, payments, refunds in entries:
                 if args.quiet:
                     # Issue #260: only the net total per currency.
                     print(

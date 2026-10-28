@@ -1918,6 +1918,227 @@ def test_module_summary_quiet_fails_without_the_secret():
     assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
 
 
+# Issue #262: `summary --top N` prints only the N largest net currencies.
+# The sample data the README's `--top` block describes: usd 1,233.57,
+# eur 500.00, jpy 500 (500.00 in hundredths, the unit the total line uses) and
+# gbp -2.00, deliberately unsorted on the wire.
+TOP_SAMPLE_LINES = [
+    "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+    "EUR 付款 500.00 退款 0.00 净额 500.00",
+]
+# The `合计` line of the two rows above: 1,234.57 + 500.00, 1.00 + 0.00.
+TOP_SAMPLE_TOTAL_LINE = "合计 付款 1,734.57 退款 1.00 净额 1,733.57"
+# `--top` larger than the currency count prints every currency, largest net
+# first, so the zero-decimal JPY (printed 500) sorts with those values.
+TOP_ALL_LINES = [
+    "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+    "EUR 付款 500.00 退款 0.00 净额 500.00",
+    "JPY 付款 500 退款 0 净额 500",
+    "GBP 付款 0.00 退款 2.00 净额 -2.00",
+]
+
+
+@pytest.fixture
+def stripe_top_lists(stripe_api):
+    """Four currencies whose net totals differ, read by the summary command."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _intent("pi_1", 123456, "usd"),
+            _intent("pi_2", 1, "usd"),
+            _intent("pi_3", 50000, "eur"),
+            _intent("pi_4", 500, "jpy"),
+        ),
+        "/v1/refunds": _list_payload(
+            _refund_record("re_1", 100, "usd"),
+            _refund_record("re_2", 200, "gbp"),
+        ),
+    }
+    return stripe_api
+
+
+def test_cli_summary_top_prints_only_the_largest_net_currencies(
+    live_key, stripe_top_lists, capsys
+):
+    """Acceptance: at most N currency lines, largest net total first, exit 0."""
+    exit_code = stripe_payments.main(["summary", "--top", "2"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines() == [
+        *TOP_SAMPLE_LINES,
+        TOP_SAMPLE_TOTAL_LINE,
+    ]
+    # --top changes the printout only: the same two Stripe lists are read.
+    assert [
+        request["path"] for request in stripe_top_lists.requests
+    ] == ["/v1/payment_intents", "/v1/refunds"]
+
+
+def test_summary_without_top_prints_every_currency_as_before(
+    live_key, stripe_top_lists, capsys
+):
+    """Acceptance: without --top the summary output is unchanged."""
+    assert stripe_payments.main(["summary"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "EUR 付款 500.00 退款 0.00 净额 500.00",
+        "GBP 付款 0.00 退款 2.00 净额 -2.00",
+        "JPY 付款 500 退款 0 净额 500",
+        "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+        "合计 付款 2,234.57 退款 3.00 净额 2,231.57",
+    ]
+
+
+def test_summary_top_larger_than_the_currency_count_prints_every_currency(
+    live_key, stripe_top_lists, capsys
+):
+    assert stripe_payments.main(["summary", "--top", "10"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        *TOP_ALL_LINES,
+        "合计 付款 2,234.57 退款 3.00 净额 2,231.57",
+    ]
+
+
+def test_summary_top_breaks_equal_net_totals_by_currency(
+    live_key, stripe_top_lists, capsys
+):
+    """eur 500.00 and jpy 500 have the same printed net: eur prints first."""
+    assert stripe_payments.main(["summary", "--top", "3"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        *TOP_ALL_LINES[:3],
+        "合计 付款 2,234.57 退款 1.00 净额 2,233.57",
+    ]
+
+
+def test_summary_top_without_records_prints_nothing(
+    live_key, stripe_api, capsys
+):
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(),
+        "/v1/refunds": _list_payload(),
+    }
+
+    assert stripe_payments.main(["summary", "--top", "2"]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_summary_top_composes_with_quiet(live_key, stripe_top_lists, capsys):
+    assert stripe_payments.main(["summary", "--top", "2", "--quiet"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        _quiet_line("USD", 123457 - 100),
+        _quiet_line("EUR", 50000),
+    ]
+
+
+def test_summary_top_follows_the_currency_filter(
+    live_key, stripe_top_lists, capsys
+):
+    assert (
+        stripe_payments.main(["summary", "--top", "2", "--currency", "usd"])
+        == 0
+    )
+
+    assert capsys.readouterr().out.splitlines() == [
+        TOP_SAMPLE_LINES[0],
+        "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
+    ]
+
+
+def test_summary_top_by_month_keeps_the_largest_month_currency_groups(
+    live_key, stripe_by_month_lists, capsys
+):
+    assert stripe_payments.main(["summary", "--top", "2", "--by-month"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "2026-10 USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+        "2026-09 JPY 付款 500 退款 0 净额 500",
+        TOP_SAMPLE_TOTAL_LINE,
+    ]
+
+
+def test_summary_top_csv_writes_only_the_selected_rows(
+    live_key, stripe_top_lists, export_date, tmp_path, capsys
+):
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            [
+                "summary",
+                "--top",
+                "1",
+                "--csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    printed = capsys.readouterr().out.splitlines()
+    assert printed[:2] == [
+        TOP_SAMPLE_LINES[0],
+        "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
+    ]
+    assert printed[2].startswith("exported summary rows=1 to ")
+    assert _summary_csv_rows(output_dir) == [
+        SUMMARY_CSV_HEADER,
+        ["USD", "1,234.57", "1.00", "1,233.57"],
+    ]
+
+
+@pytest.mark.parametrize("count", ["0", "-1"])
+def test_summary_top_rejects_a_non_positive_count(
+    count, live_key, stripe_top_lists, capsys
+):
+    assert stripe_payments.main(["summary", "--top", count]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert f"--top must be positive, got {count}" in captured.err
+    # The argument is checked before any Stripe call.
+    assert stripe_top_lists.requests == []
+
+
+def test_summary_top_requires_an_integer(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["summary", "--top", "two"])
+
+    assert excinfo.value.code == 2
+    assert "--top" in capsys.readouterr().err
+
+
+def test_summary_help_describes_the_top_option(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["summary", "--help"])
+
+    assert excinfo.value.code == 0
+    assert "--top" in capsys.readouterr().out
+
+
+def test_module_summary_top_fails_without_the_secret():
+    """The real user entry point: ``python -m stripe_payments summary --top 2``."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != stripe_payments.LIVE_SECRET_KEY_ENV
+    }
+    result = subprocess.run(
+        [sys.executable, "-m", "stripe_payments", "summary", "--top", "2"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
+
+
 # --- refunds-summary (Issue #224) ---------------------------------------
 
 
