@@ -1772,6 +1772,152 @@ def test_module_summary_by_month_fails_without_the_secret():
     assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
 
 
+# Issue #260: `summary --quiet` prints only the net total per currency.
+QUIET_SAMPLE_LINES = [
+    "EUR 10.00",
+    "USD 1,233.57",
+]
+
+
+def _quiet_line(currency, net):
+    """The net-only line the README documents, e.g. ``USD 1,233.57``."""
+    return f"{currency} {stripe_payments._format_number(net, currency)}"
+
+
+def test_cli_summary_quiet_prints_only_the_net_total_per_currency(
+    live_key, stripe_summary_lists, capsys
+):
+    """Acceptance: one line per currency, only the net total, exit code 0."""
+    exit_code = stripe_payments.main(["summary", "--quiet"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines() == [
+        _quiet_line("EUR", 1000 - 0),
+        _quiet_line("USD", 123457 - 100),
+    ]
+    # Quiet changes the printout only: the same two Stripe lists are read.
+    assert [
+        request["path"] for request in stripe_summary_lists.requests
+    ] == ["/v1/payment_intents", "/v1/refunds"]
+
+
+def test_summary_quiet_net_values_equal_the_plain_summary_nets(
+    live_key, stripe_summary_lists, capsys
+):
+    """Acceptance: quiet reports the same net the full summary already prints."""
+    assert stripe_payments.main(["summary"]) == 0
+    plain = {}
+    for line in capsys.readouterr().out.splitlines():
+        if line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL):
+            continue
+        fields = line.split()
+        plain[fields[0]] = fields[-1]
+
+    assert stripe_payments.main(["summary", "--quiet"]) == 0
+    quiet = {
+        fields[0]: fields[1]
+        for fields in (
+            line.split()
+            for line in capsys.readouterr().out.splitlines()
+        )
+    }
+
+    assert quiet == plain
+
+
+def test_summary_quiet_follows_the_currency_filter(
+    live_key, stripe_summary_lists, capsys
+):
+    assert (
+        stripe_payments.main(["summary", "--quiet", "--currency", "usd"])
+        == 0
+    )
+
+    assert capsys.readouterr().out.splitlines() == [_quiet_line("USD", 123357)]
+
+
+def test_summary_quiet_by_month_keeps_the_month_prefix(
+    live_key, stripe_by_month_lists, capsys
+):
+    assert stripe_payments.main(["summary", "--quiet", "--by-month"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "2026-09 EUR -2.00",
+        "2026-09 JPY 500",
+        "2026-09 USD 9.50",
+        "2026-10 EUR 10.00",
+        "2026-10 USD 1,233.57",
+    ]
+
+
+def test_summary_quiet_without_records_prints_nothing(
+    live_key, stripe_api, capsys
+):
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(),
+        "/v1/refunds": _list_payload(),
+    }
+
+    assert stripe_payments.main(["summary", "--quiet"]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_summary_quiet_with_csv_prints_no_file_notice_and_writes_the_rows(
+    live_key, stripe_summary_lists, export_date, tmp_path, capsys
+):
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            [
+                "summary",
+                "--quiet",
+                "--csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    # Quiet prints only the net totals, but --csv still writes the same file.
+    assert capsys.readouterr().out.splitlines() == QUIET_SAMPLE_LINES
+    assert _summary_csv_rows(output_dir) == [
+        SUMMARY_CSV_HEADER,
+        ["EUR", "10.00", "0.00", "10.00"],
+        ["USD", "1,234.57", "1.00", "1,233.57"],
+    ]
+
+
+def test_summary_help_describes_the_quiet_option(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["summary", "--help"])
+
+    assert excinfo.value.code == 0
+    assert "--quiet" in capsys.readouterr().out
+
+
+def test_module_summary_quiet_fails_without_the_secret():
+    """The real user entry point: ``python -m stripe_payments summary --quiet``."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != stripe_payments.LIVE_SECRET_KEY_ENV
+    }
+    result = subprocess.run(
+        [sys.executable, "-m", "stripe_payments", "summary", "--quiet"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
+
+
 # --- refunds-summary (Issue #224) ---------------------------------------
 
 

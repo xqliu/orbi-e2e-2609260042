@@ -490,6 +490,32 @@ def test_readme_documents_the_by_month_csv_month_column():
     )
 
 
+# Issue #260: `summary --quiet` prints only the net total per currency.
+# The sample data is the README's quiet output block, rendered through the real
+# `_summary_net_line()` below, so the docs cannot drift from the output.
+QUIET_SAMPLE_DATA = (("eur", 1000, 0), ("usd", 123457, 100))
+
+
+def test_readme_documents_the_summary_quiet_option():
+    """Issue #260: the summary section shows the --quiet usage and its output."""
+    body = _readme_subsection(README_SUMMARY_HEADING)
+    assert "--quiet" in _subparser_option_strings("summary"), (
+        "the summary subparser must define --quiet"
+    )
+    assert f"{STRIPE_SUMMARY_COMMAND} --quiet" in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show "
+        f"{STRIPE_SUMMARY_COMMAND!r} --quiet"
+    )
+    expected = "\n".join(
+        stripe_payments._summary_net_line(currency, payments, refunds)
+        for currency, payments, refunds in QUIET_SAMPLE_DATA
+    )
+    assert expected in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show the complete "
+        f"`summary --quiet` output, got:\n{body}"
+    )
+
+
 def test_readme_documents_the_refunds_summary_command_output():
     """Issue #224/#249: one ISO week/currency per line, count and amount."""
     text = _read(README)
