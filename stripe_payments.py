@@ -16,6 +16,9 @@ that talks to the Stripe API with the operator's live secret key.
   take the data elsewhere.  ``--format csv|json|both`` picks the file types
   (``both`` by default), so an operator who only needs CSV no longer has to
   delete the JSON files by hand.
+* ``python -m stripe_payments summary`` prints the payments total, the refunds
+  total and the net income per currency, one currency per line, so a daily
+  check does not need the exported CSV files.
 
 The live secret key is read from the ``STRIPE_LIVE_SECRET_KEY`` environment
 variable (an environment secret of the protected ``stripe-live`` GitHub
@@ -63,6 +66,16 @@ EXPORT_COLUMNS = {
     ),
     "customers": ("id", "email", "created"),
 }
+
+# Stripe keeps amounts in the smallest currency unit, but these currencies have
+# no minor unit: 500 is 500 JPY, not 5.00 JPY (docs.stripe.com/currencies,
+# "Zero-decimal currencies").  Every other currency uses two decimals.
+# UGX is listed as zero-decimal on that page, but the "Special cases" section on
+# the same page requires its amount values to be the two-decimal value (500
+# means 5 UGX), so UGX is formatted like the two-decimal currencies.
+ZERO_DECIMAL_CURRENCIES = frozenset(
+    "bif clp djf gnf jpy kmf krw mga pyg rwf vnd vuv xaf xof xpf".split()
+)
 
 
 class ConfigurationError(RuntimeError):
@@ -192,6 +205,47 @@ def export_data(
     return len(rows["payments"]), len(rows["refunds"]), len(rows["customers"])
 
 
+def summarize_data() -> dict[str, tuple[int, int]]:
+    """Return ``{currency: (payments_total, refunds_total)}`` for the account.
+
+    Every page of the PaymentIntents and Refunds lists is read, so the totals
+    cover the whole account, not only the first page.
+    """
+    stripe.api_key = live_secret_key()
+    totals: dict[str, list[int]] = {}
+    for payment in _list_all(stripe.PaymentIntent, limit=DEFAULT_LIMIT):
+        totals.setdefault(payment.currency.lower(), [0, 0])[0] += payment.amount
+    for refund in _list_all(stripe.Refund, limit=DEFAULT_LIMIT):
+        totals.setdefault(refund.currency.lower(), [0, 0])[1] += refund.amount
+    return {
+        currency: (payments, refunds)
+        for currency, (payments, refunds) in totals.items()
+    }
+
+
+def _format_number(amount: int, currency: str) -> str:
+    """Format a Stripe minor-unit amount without the currency code."""
+    if currency.lower() in ZERO_DECIMAL_CURRENCIES:
+        return f"{amount:,}"
+    sign = "-" if amount < 0 else ""
+    major, minor = divmod(abs(amount), 100)
+    return f"{sign}{major:,}.{minor:02d}"
+
+
+def format_amount(amount: int, currency: str) -> str:
+    """Format a Stripe amount as ``1,234.56 USD`` (Issue #221)."""
+    return f"{_format_number(amount, currency)} {currency.upper()}"
+
+
+def _summary_line(currency: str, payments: int, refunds: int) -> str:
+    """One summary line for a currency, e.g. ``USD 付款 1,234.56 ...``."""
+    return (
+        f"{currency.upper()} 付款 {_format_number(payments, currency)} "
+        f"退款 {_format_number(refunds, currency)} "
+        f"净额 {_format_number(payments - refunds, currency)}"
+    )
+
+
 def _created(value: object) -> str:
     """Format Stripe's UTC epoch seconds as ``YYYY-MM-DDTHH:MM:SSZ``."""
     return datetime.fromtimestamp(int(value), tz=timezone.utc).strftime(
@@ -274,6 +328,14 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
 
+    subcommands.add_parser(
+        "summary",
+        help=(
+            "print payments, refunds and net income totals per currency, "
+            "one currency per line"
+        ),
+    )
+
     export = subcommands.add_parser(
         "export",
         help="export payments, refunds and customers to CSV and JSON files",
@@ -330,6 +392,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print(f"payment_intent id={intent.id} status={intent.status}")
             return 0 if intent.status == "succeeded" else 1
+        if args.command == "summary":
+            totals = summarize_data()
+            for currency in sorted(totals):
+                payments, refunds = totals[currency]
+                print(_summary_line(currency, payments, refunds))
+            return 0
         if args.limit < 1 or args.limit > MAX_LIMIT:
             raise ConfigurationError(
                 f"--limit must be between 1 and {MAX_LIMIT}, got {args.limit}"

@@ -856,3 +856,124 @@ def test_export_writes_nothing_when_a_later_page_fails(
         request["form"].get("starting_after") for request in stripe_api.requests
     ] == [None, ["pi_1"]]
     assert not output_dir.exists()
+
+
+# --- summary (Issue #221) -----------------------------------------------
+
+
+def _intent(identifier, amount, currency):
+    return {
+        "id": identifier,
+        "object": "payment_intent",
+        "amount": amount,
+        "currency": currency,
+        "status": "succeeded",
+        "created": 1700000000,
+    }
+
+
+def _refund_record(identifier, amount, currency):
+    return {
+        "id": identifier,
+        "object": "refund",
+        "payment_intent": "pi_1",
+        "amount": amount,
+        "currency": currency,
+        "status": "succeeded",
+        "created": 1700000100,
+    }
+
+
+@pytest.fixture
+def stripe_summary_lists(stripe_api):
+    """Two currencies of payments and one refund, as the summary command reads them."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _intent("pi_1", 123456, "usd"),
+            _intent("pi_2", 1, "usd"),
+            _intent("pi_3", 1000, "eur"),
+        ),
+        "/v1/refunds": _list_payload(_refund_record("re_1", 100, "usd")),
+    }
+    return stripe_api
+
+
+def test_cli_summary_prints_one_formatted_line_per_currency(
+    live_key, stripe_summary_lists, capsys
+):
+    exit_code = stripe_payments.main(["summary"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines() == [
+        # One line per currency, sorted by currency code; thousands separators
+        # and an upper-case currency code.
+        "EUR 付款 10.00 退款 0.00 净额 10.00",
+        "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+    ]
+
+
+def test_summary_reads_payments_and_refunds_only(
+    live_key, stripe_summary_lists, capsys
+):
+    stripe_payments.main(["summary"])
+
+    assert [
+        (request["path"], request["form"].get("limit"))
+        for request in stripe_summary_lists.requests
+    ] == [
+        ("/v1/payment_intents", ["10"]),
+        ("/v1/refunds", ["10"]),
+    ]
+    assert all(
+        request["authorization"] == "Bearer sk_live_test_key"
+        for request in stripe_summary_lists.requests
+    )
+
+
+def test_summary_totals_every_page(live_key, stripe_api, capsys):
+    stripe_api.list_payloads = {"/v1/refunds": _list_payload()}
+    stripe_api.list_pages = {
+        "/v1/payment_intents": {
+            None: _list_payload(_intent("pi_1", 123456, "usd"), has_more=True),
+            "pi_1": _list_payload(_intent("pi_2", 1, "usd")),
+        }
+    }
+
+    assert stripe_payments.main(["summary"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "USD 付款 1,234.57 退款 0.00 净额 1,234.57",
+    ]
+
+
+def test_summary_prints_nothing_when_the_account_has_no_records(
+    live_key, stripe_api, capsys
+):
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(),
+        "/v1/refunds": _list_payload(),
+    }
+
+    assert stripe_payments.main(["summary"]) == 0
+    assert capsys.readouterr().out == ""
+    assert [request["path"] for request in stripe_api.requests] == [
+        "/v1/payment_intents",
+        "/v1/refunds",
+    ]
+
+
+def test_cli_summary_without_the_secret_names_the_variable(
+    monkeypatch, stripe_api, capsys
+):
+    monkeypatch.delenv(stripe_payments.LIVE_SECRET_KEY_ENV, raising=False)
+
+    assert stripe_payments.main(["summary"]) == 2
+    assert stripe_payments.LIVE_SECRET_KEY_ENV in capsys.readouterr().err
+    assert stripe_api.requests == []
+
+
+def test_summary_help_describes_the_command(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["summary", "--help"])
+
+    assert excinfo.value.code == 0
+    assert "summary" in capsys.readouterr().out

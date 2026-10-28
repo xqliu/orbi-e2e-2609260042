@@ -150,6 +150,30 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --format bot
 'both')`，此时不会调用 Stripe、也不会创建目录；按提示改成这三档之一再运行。缺少
 `STRIPE_LIVE_SECRET_KEY` 时同样以退出码 2 报出变量名，补上环境变量后重跑。
 
+### 汇总收入（summary）
+
+`summary` 子命令在终端按币种逐行打印付款总额、退款总额和净收入，金额带千分位、
+币种大写，每天看一眼即可，不用再打开 CSV 自己算：
+
+```sh
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary
+```
+
+每个币种一行（按币种代码排序），例如：
+
+```
+EUR 付款 10.00 退款 0.00 净额 10.00
+USD 付款 1,234.57 退款 1.00 净额 1,233.57
+```
+
+金额按 Stripe 的最小货币单位换算：两位小数币种（如 USD、EUR、CNY）除以 100，
+零小数币种（如 JPY、KRW）按文档（<https://docs.stripe.com/currencies>）原样打印
+整数；净额 = 付款 - 退款。账户没有付款和退款时不打印任何行。
+
+失败与修复：缺少 `STRIPE_LIVE_SECRET_KEY` 时命令以退出码 2 结束并报
+`error: STRIPE_LIVE_SECRET_KEY is not set...`，补上环境变量后重跑；密钥失效时
+报 Stripe 的 `HTTP 401`，轮换环境 secret 后重跑。
+
 ## FAQ
 
 ### Q：这个仓库是什么？为什么不接受 PR？
