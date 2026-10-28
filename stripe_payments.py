@@ -39,7 +39,8 @@ that talks to the Stripe API with the operator's live secret key.
   check does not need the exported CSV files.  ``--currency usd`` prints only
   that currency's line; omitted, every currency is printed.  After the
   currency rows one all-currency ``合计`` line adds up the printed values
-  above it (Issue #243).  ``--csv`` also
+  above it (Issue #243).  ``--by-month`` groups the lines by month (UTC) and
+  currency instead (Issue #248).  ``--csv`` also
   writes those same rows to ``summary-<date>.csv`` (one column per summary
   field, so a spreadsheet shows them side by side); omitted, the command only
   prints, as before.
@@ -120,11 +121,16 @@ EXPORT_HEADERS = {
     "payments": "付款",
     "refunds": "退款",
     "net": "净额",
+    "month": "月份",
 }
 
 # Issue #240: the summary CSV columns.  A row carries exactly the fields the
 # printed summary line carries, so both come from the same ``_summary_row()``.
 SUMMARY_COLUMNS = ("currency", "payments", "refunds", "net")
+
+# Issue #248: `summary --by-month` prints one line per month and currency, so
+# its CSV rows carry the month in a leading column first.
+SUMMARY_COLUMNS_BY_MONTH = ("month",) + SUMMARY_COLUMNS
 
 # Issue #243: the summary ends with one line adding up the printed currencies,
 # so a daily check reads the grand total instead of adding the lines by hand.
@@ -340,25 +346,52 @@ def export_data(
     return len(rows["payments"]), len(rows["refunds"]), len(rows["customers"])
 
 
-def summarize_data() -> dict[str, tuple[int, int]]:
+def _month(created: object) -> str:
+    """The UTC year and month (``YYYY-MM``) of a Stripe ``created`` value."""
+    return datetime.fromtimestamp(int(created), tz=timezone.utc).strftime(
+        "%Y-%m"
+    )
+
+
+def summarize_data(
+    *, by_month: bool = False
+) -> dict[str, tuple[int, int]] | dict[tuple[str, str], tuple[int, int]]:
     """Return ``{currency: (payments_total, refunds_total)}`` for the account.
+
+    With ``by_month`` the key is ``(YYYY-MM, currency)`` instead (Issue #248),
+    the month being the record's own ``created`` timestamp in UTC, so every
+    month is totalled on its own.
 
     Every page of the PaymentIntents and Refunds lists is read, so the totals
     cover the whole account, not only the first page.
     """
     stripe.api_key = live_secret_key()
-    totals: dict[str, list[int]] = {}
+    totals: dict[object, list[int]] = {}
     for payment in _list_all(stripe.PaymentIntent, limit=DEFAULT_LIMIT):
-        totals.setdefault(payment.currency.lower(), [0, 0])[0] += payment.amount
+        key = _summary_key(
+            payment.currency, payment.created, by_month=by_month
+        )
+        totals.setdefault(key, [0, 0])[0] += payment.amount
     for refund in _list_all(stripe.Refund, limit=DEFAULT_LIMIT):
-        totals.setdefault(refund.currency.lower(), [0, 0])[1] += refund.amount
+        key = _summary_key(
+            refund.currency, refund.created, by_month=by_month
+        )
+        totals.setdefault(key, [0, 0])[1] += refund.amount
     return {
-        currency: (payments, refunds)
-        for currency, (payments, refunds) in totals.items()
+        key: (payments, refunds)
+        for key, (payments, refunds) in totals.items()
     }
 
 
-def _iso_week(created: int) -> str:
+def _summary_key(
+    currency: str, created: object, *, by_month: bool
+) -> str | tuple[str, str]:
+    """The summary total key: the currency, or ``(month, currency)``."""
+    code = currency.lower()
+    return (_month(created), code) if by_month else code
+
+
+def _iso_week(created: object) -> str:
     """The UTC ISO 8601 week of a Stripe ``created`` timestamp, e.g. ``2026-W44``.
 
     ``datetime.isocalendar()`` is the standard library's ISO 8601 calendar
@@ -425,21 +458,33 @@ def format_amount(amount: int, currency: str) -> str:
     return f"{_format_number(amount, currency)} {currency.upper()}"
 
 
-def _summary_row(currency: str, payments: int, refunds: int) -> dict:
+def _summary_row(
+    currency: str, payments: int, refunds: int, *, month: str | None = None
+) -> dict:
     """The summary fields: the printed line and the CSV row share them."""
-    return {
+    row = {
         "currency": currency.upper(),
         "payments": _format_number(payments, currency),
         "refunds": _format_number(refunds, currency),
         "net": _format_number(payments - refunds, currency),
     }
+    if month is not None:
+        row["month"] = month
+    return row
 
 
-def _summary_line(currency: str, payments: int, refunds: int) -> str:
-    """One summary line for a currency, e.g. ``USD 付款 1,234.56 ...``."""
-    row = _summary_row(currency, payments, refunds)
+def _summary_line(
+    currency: str, payments: int, refunds: int, *, month: str | None = None
+) -> str:
+    """One summary line for a currency, e.g. ``USD 付款 1,234.56 ...``.
+
+    A ``month`` prefixes the same line with that UTC month (Issue #248), e.g.
+    ``2026-10 USD 付款 1,234.57 退款 1.00 净额 1,233.57``.
+    """
+    row = _summary_row(currency, payments, refunds, month=month)
+    prefix = f"{month} " if month is not None else ""
     return (
-        f"{row['currency']} 付款 {row['payments']} "
+        f"{prefix}{row['currency']} 付款 {row['payments']} "
         f"退款 {row['refunds']} 净额 {row['net']}"
     )
 
@@ -458,16 +503,20 @@ def _summary_total_line(payments: int, refunds: int) -> str:
     )
 
 
-def write_summary_csv(rows: Sequence[dict], *, output_dir: str) -> Path:
+def write_summary_csv(
+    rows: Sequence[dict], *, output_dir: str, by_month: bool = False
+) -> Path:
     """Write the summary rows to ``<output_dir>/summary-<date>.csv``.
 
     The file name carries the UTC export date like the ``export`` files do
-    (Issue #230), so two days of summaries do not overwrite each other.
+    (Issue #230), so two days of summaries do not overwrite each other.  With
+    ``by_month`` the rows carry a leading ``month`` column (Issue #248).
     """
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"summary-{export_date()}.csv"
-    _write_csv(path, SUMMARY_COLUMNS, rows)
+    columns = SUMMARY_COLUMNS_BY_MONTH if by_month else SUMMARY_COLUMNS
+    _write_csv(path, columns, rows)
     return path
 
 
@@ -606,6 +655,14 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     summary.add_argument(
+        "--by-month",
+        action="store_true",
+        help=(
+            "group the totals by month (UTC) and currency, one line per month "
+            "and currency; omitted, one line per currency"
+        ),
+    )
+    summary.add_argument(
         "--csv",
         action="store_true",
         help=(
@@ -711,23 +768,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise ConfigurationError(
                         f"--currency must not be empty, got {args.currency!r}"
                     )
-            totals = summarize_data()
+            totals = summarize_data(by_month=args.by_month)
             rows = []
             total_payments = 0
             total_refunds = 0
-            for code in sorted(totals):
+            for key in sorted(totals):
+                month, code = key if args.by_month else (None, key)
                 if currency is not None and code != currency:
                     continue
-                payments, refunds = totals[code]
-                print(_summary_line(code, payments, refunds))
-                rows.append(_summary_row(code, payments, refunds))
+                payments, refunds = totals[key]
+                print(_summary_line(code, payments, refunds, month=month))
+                rows.append(
+                    _summary_row(code, payments, refunds, month=month)
+                )
                 total_payments += _summary_hundredths(payments, code)
                 total_refunds += _summary_hundredths(refunds, code)
             if rows:
                 # Issue #243: the extra last row adds up the printed values.
                 print(_summary_total_line(total_payments, total_refunds))
             if args.csv:
-                path = write_summary_csv(rows, output_dir=args.output_dir)
+                path = write_summary_csv(
+                    rows, output_dir=args.output_dir, by_month=args.by_month
+                )
                 print(f"exported summary rows={len(rows)} to {path}")
             return 0
         if args.command == "refunds-summary":

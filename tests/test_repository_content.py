@@ -423,6 +423,69 @@ def test_readme_documents_the_summary_csv_export():
     )
 
 
+# Issue #248: `summary --by-month` groups the totals by month and currency.
+SUMMARY_BY_MONTH_SAMPLE_LINE = (
+    "2026-10 USD 付款 1,234.57 退款 1.00 净额 1,233.57"
+)
+# The sample data the README by-month block describes, rendered through the
+# real `_summary_line()` below, so the docs cannot drift from the output.
+SUMMARY_BY_MONTH_SAMPLE_DATA = (
+    ("2026-09", "eur", 0, 200),
+    ("2026-09", "jpy", 500, 0),
+    ("2026-09", "usd", 1000, 50),
+    ("2026-10", "eur", 1000, 0),
+    ("2026-10", "usd", 123457, 100),
+)
+
+
+def test_readme_documents_the_summary_by_month_option():
+    """Issue #248: the summary section shows the --by-month usage."""
+    body = _readme_subsection(README_SUMMARY_HEADING)
+    assert "--by-month" in _subparser_option_strings("summary"), (
+        "the summary subparser must define --by-month"
+    )
+    assert f"{STRIPE_SUMMARY_COMMAND} --by-month" in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show "
+        f"{STRIPE_SUMMARY_COMMAND!r} --by-month"
+    )
+    assert SUMMARY_BY_MONTH_SAMPLE_LINE in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show a by-month line "
+        f"like {SUMMARY_BY_MONTH_SAMPLE_LINE!r}"
+    )
+
+
+def test_readme_shows_the_complete_by_month_summary_output():
+    """Issue #248: the section shows the whole grouped output, in order."""
+    body = _readme_subsection(README_SUMMARY_HEADING)
+    expected = "\n".join(
+        stripe_payments._summary_line(
+            currency, payments, refunds, month=month
+        )
+        for month, currency, payments, refunds in SUMMARY_BY_MONTH_SAMPLE_DATA
+    )
+    assert expected in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show the complete "
+        f"`summary --by-month` output, got:\n{body}"
+    )
+
+
+def test_readme_documents_the_by_month_csv_month_column():
+    """Issue #248: `--by-month --csv` adds the `月份` column to the CSV."""
+    body = _readme_subsection(README_SUMMARY_HEADING)
+    assert f"{STRIPE_SUMMARY_COMMAND} --by-month --csv" in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show "
+        f"{STRIPE_SUMMARY_COMMAND!r} --by-month --csv"
+    )
+    header = ",".join(
+        stripe_payments.EXPORT_HEADERS[column]
+        for column in stripe_payments.SUMMARY_COLUMNS_BY_MONTH
+    )
+    assert header in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show the by-month CSV "
+        f"header row {header!r}"
+    )
+
+
 def test_readme_documents_the_refunds_summary_command_output():
     """Issue #224/#249: one ISO week/currency per line, count and amount."""
     text = _read(README)

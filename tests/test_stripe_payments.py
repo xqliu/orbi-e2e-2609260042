@@ -1463,6 +1463,277 @@ def test_summary_help_describes_the_csv_option(capsys):
     assert "--output-dir" in output
 
 
+# --- summary --by-month (Issue #248) -----------------------------------
+
+
+def _by_month_intent(identifier, amount, currency, created):
+    return {
+        "id": identifier,
+        "object": "payment_intent",
+        "amount": amount,
+        "currency": currency,
+        "status": "succeeded",
+        "created": created,
+    }
+
+
+def _by_month_refund(identifier, amount, currency, created):
+    return {
+        "id": identifier,
+        "object": "refund",
+        "payment_intent": "pi_by_month_1",
+        "amount": amount,
+        "currency": currency,
+        "status": "succeeded",
+        "created": created,
+    }
+
+
+# September and October 2026 records with their own currencies and amounts, so
+# a record leaking into the wrong month shows up as a wrong group value.
+def _by_month_payments():
+    return (
+        _by_month_intent("pi_by_month_1", 1000, "usd", _utc(2026, 9, 10, 12)),
+        _by_month_intent("pi_by_month_2", 500, "jpy", _utc(2026, 9, 11, 12)),
+        _by_month_intent("pi_by_month_3", 1000, "eur", _utc(2026, 10, 5, 12)),
+        _by_month_intent("pi_by_month_4", 123456, "usd", _utc(2026, 10, 6, 12)),
+        # The last second of October still belongs to October.
+        _by_month_intent("pi_by_month_5", 1, "usd", _utc(2026, 10, 31, 23, 59)),
+    )
+
+
+def _by_month_refunds():
+    return (
+        _by_month_refund("re_by_month_1", 50, "usd", _utc(2026, 9, 12, 12)),
+        _by_month_refund("re_by_month_2", 200, "eur", _utc(2026, 9, 13, 12)),
+        _by_month_refund("re_by_month_3", 100, "usd", _utc(2026, 10, 8, 12)),
+    )
+BY_MONTH_SAMPLE_LINES = [
+    "2026-09 EUR 付款 0.00 退款 2.00 净额 -2.00",
+    "2026-09 JPY 付款 500 退款 0 净额 500",
+    "2026-09 USD 付款 10.00 退款 0.50 净额 9.50",
+    "2026-10 EUR 付款 10.00 退款 0.00 净额 10.00",
+    "2026-10 USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+]
+BY_MONTH_TOTAL_LINE = "合计 付款 1,754.57 退款 3.50 净额 1,751.07"
+
+
+@pytest.fixture
+def stripe_by_month_lists(stripe_api):
+    """Payments and refunds of two months, as `summary --by-month` reads them."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(*_by_month_payments()),
+        "/v1/refunds": _list_payload(*_by_month_refunds()),
+    }
+
+
+def _decimal(printed):
+    """Parse a printed amount (thousands separators dropped) for comparison."""
+    return Decimal(printed.replace(",", ""))
+
+
+def _printed_amounts(line):
+    """The three printed amounts of a summary line, as Decimals."""
+    fields = line.split()
+    return tuple(_decimal(value) for value in (fields[-5], fields[-3], fields[-1]))
+
+
+def _by_month_groups(printed):
+    """Parse the printed month lines into ``{(month, currency): amounts}``."""
+    return {
+        (fields[0], fields[1]): _printed_amounts(line)
+        for line in printed
+        if not line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL)
+        for fields in [line.split()]
+    }
+
+
+def _expected_by_month_groups():
+    """The ``{(month, currency): amounts}`` the fixtures must produce."""
+    totals = {}
+    for position, records in enumerate(
+        (_by_month_payments(), _by_month_refunds())
+    ):
+        for record in records:
+            month = datetime.fromtimestamp(
+                record["created"], tz=timezone.utc
+            ).strftime("%Y-%m")
+            key = (month, record["currency"].upper())
+            totals.setdefault(key, [0, 0])[position] += record["amount"]
+    return {
+        key: tuple(
+            _decimal(
+                stripe_payments._format_number(amount, key[1])
+            )
+            for amount in (payments, refunds, payments - refunds)
+        )
+        for key, (payments, refunds) in totals.items()
+    }
+
+
+def test_cli_summary_by_month_groups_each_currency_per_month(
+    live_key, stripe_by_month_lists, capsys
+):
+    """Acceptance: one line per month and currency, then the total line."""
+    assert stripe_payments.main(["summary", "--by-month"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        *BY_MONTH_SAMPLE_LINES,
+        BY_MONTH_TOTAL_LINE,
+    ]
+
+
+def test_summary_by_month_values_match_each_months_records(
+    live_key, stripe_by_month_lists, capsys
+):
+    """Acceptance: every group's values are that month's own records."""
+    assert stripe_payments.main(["summary", "--by-month"]) == 0
+    groups = _by_month_groups(capsys.readouterr().out.splitlines())
+
+    assert groups == _expected_by_month_groups()
+
+    # The months add up to what plain `summary` prints per currency, so no
+    # record is counted twice or dropped by the grouping.
+    assert stripe_payments.main(["summary"]) == 0
+    plain = {}
+    for line in capsys.readouterr().out.splitlines():
+        if line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL):
+            continue
+        fields = line.split()
+        plain[fields[0]] = _printed_amounts(line)
+    grouped = {}
+    for (month, currency), amounts in groups.items():
+        running = grouped.setdefault(currency.upper(), [Decimal(0)] * 3)
+        for index, amount in enumerate(amounts):
+            running[index] += amount
+    assert {code: tuple(amounts) for code, amounts in grouped.items()} == plain
+
+
+def test_summary_by_month_total_line_adds_up_the_printed_groups(
+    live_key, stripe_by_month_lists, capsys
+):
+    assert stripe_payments.main(["summary", "--by-month"]) == 0
+
+    printed = capsys.readouterr().out.splitlines()
+    assert printed[-1] == BY_MONTH_TOTAL_LINE
+    payments, refunds, net = _printed_amounts(BY_MONTH_TOTAL_LINE)
+    expected_payments = sum(
+        (amounts[0] for amounts in _by_month_groups(printed[:-1]).values()),
+        Decimal(0),
+    )
+    assert payments == expected_payments
+    assert net == payments - refunds
+
+
+def test_summary_by_month_totals_every_page(live_key, stripe_api, capsys):
+    stripe_api.list_payloads = {"/v1/refunds": _list_payload()}
+    stripe_api.list_pages = {
+        "/v1/payment_intents": {
+            None: _list_payload(
+                _by_month_intent("pi_page_1", 1000, "usd", _utc(2026, 9, 10)),
+                has_more=True,
+            ),
+            "pi_page_1": _list_payload(
+                _by_month_intent("pi_page_2", 2000, "usd", _utc(2026, 10, 10))
+            ),
+        }
+    }
+
+    assert stripe_payments.main(["summary", "--by-month"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "2026-09 USD 付款 10.00 退款 0.00 净额 10.00",
+        "2026-10 USD 付款 20.00 退款 0.00 净额 20.00",
+        "合计 付款 30.00 退款 0.00 净额 30.00",
+    ]
+
+
+def test_summary_by_month_follows_the_currency_filter(
+    live_key, stripe_by_month_lists, capsys
+):
+    assert stripe_payments.main(
+        ["summary", "--by-month", "--currency", "USD"]
+    ) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "2026-09 USD 付款 10.00 退款 0.50 净额 9.50",
+        "2026-10 USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+        "合计 付款 1,244.57 退款 1.50 净额 1,243.07",
+    ]
+
+
+def test_summary_by_month_without_records_prints_nothing(
+    live_key, stripe_api, capsys
+):
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(),
+        "/v1/refunds": _list_payload(),
+    }
+
+    assert stripe_payments.main(["summary", "--by-month"]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_summary_by_month_csv_adds_the_month_column(
+    live_key, stripe_by_month_lists, export_date, tmp_path, capsys
+):
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            [
+                "summary",
+                "--by-month",
+                "--csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    printed = capsys.readouterr().out.splitlines()
+    assert printed[-2] == BY_MONTH_TOTAL_LINE
+    assert printed[-1] == (
+        f"exported summary rows=5 to {_summary_csv_file(output_dir)}"
+    )
+    assert _summary_csv_rows(output_dir) == [
+        ["月份", "币种", "付款", "退款", "净额"],
+        ["2026-09", "EUR", "0.00", "2.00", "-2.00"],
+        ["2026-09", "JPY", "500", "0", "500"],
+        ["2026-09", "USD", "10.00", "0.50", "9.50"],
+        ["2026-10", "EUR", "10.00", "0.00", "10.00"],
+        ["2026-10", "USD", "1,234.57", "1.00", "1,233.57"],
+    ]
+
+
+def test_summary_help_describes_the_by_month_option(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["summary", "--help"])
+
+    assert excinfo.value.code == 0
+    assert "--by-month" in capsys.readouterr().out
+
+
+def test_module_summary_by_month_fails_without_the_secret():
+    """The real user entry point: ``python -m stripe_payments summary --by-month``."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != stripe_payments.LIVE_SECRET_KEY_ENV
+    }
+    result = subprocess.run(
+        [sys.executable, "-m", "stripe_payments", "summary", "--by-month"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+
+    assert result.returncode == 2
+    assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
+
+
 # --- refunds-summary (Issue #224) ---------------------------------------
 
 
