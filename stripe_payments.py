@@ -22,7 +22,8 @@ that talks to the Stripe API with the operator's live secret key.
   ``customer`` column); omitted, the whole account is exported as before.
 * ``python -m stripe_payments summary`` prints the payments total, the refunds
   total and the net income per currency, one currency per line, so a daily
-  check does not need the exported CSV files.
+  check does not need the exported CSV files.  ``--currency usd`` prints only
+  that currency's line; omitted, every currency is printed.
 * ``python -m stripe_payments refunds-summary`` prints the refund count and
   amount per month and currency, one line per month and currency, so the
   refunds of a month can be read without filtering the exported CSV files.
@@ -411,11 +412,19 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
 
-    subcommands.add_parser(
+    summary = subcommands.add_parser(
         "summary",
         help=(
             "print payments, refunds and net income totals per currency, "
             "one currency per line"
+        ),
+    )
+    summary.add_argument(
+        "--currency",
+        default=None,
+        help=(
+            "only print this currency's totals (e.g. usd, case-insensitive); "
+            "omitted, every currency is printed"
         ),
     )
 
@@ -492,10 +501,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"payment_intent id={intent.id} status={intent.status}")
             return 0 if intent.status == "succeeded" else 1
         if args.command == "summary":
+            currency = None
+            if args.currency is not None:
+                currency = args.currency.strip().lower()
+                if not currency:
+                    raise ConfigurationError(
+                        f"--currency must not be empty, got {args.currency!r}"
+                    )
             totals = summarize_data()
-            for currency in sorted(totals):
-                payments, refunds = totals[currency]
-                print(_summary_line(currency, payments, refunds))
+            for code in sorted(totals):
+                if currency is not None and code != currency:
+                    continue
+                payments, refunds = totals[code]
+                print(_summary_line(code, payments, refunds))
             return 0
         if args.command == "refunds-summary":
             refund_totals = summarize_refunds_by_month()

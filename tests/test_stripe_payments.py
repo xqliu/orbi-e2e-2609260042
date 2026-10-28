@@ -1042,7 +1042,83 @@ def test_summary_help_describes_the_command(capsys):
         stripe_payments.main(["summary", "--help"])
 
     assert excinfo.value.code == 0
-    assert "summary" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "summary" in output
+    assert "--currency" in output
+
+
+# Issue #234: `summary --currency usd` prints only the usd line; omitted, every
+# currency is printed as before.
+def test_cli_summary_currency_prints_only_that_currency_line(
+    live_key, stripe_summary_lists, capsys
+):
+    exit_code = stripe_payments.main(["summary", "--currency", "usd"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+    ]
+
+
+def test_cli_summary_currency_is_case_insensitive(
+    live_key, stripe_summary_lists, capsys
+):
+    assert stripe_payments.main(["summary", "--currency", "USD"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+    ]
+
+
+def test_cli_summary_currency_without_records_prints_nothing(
+    live_key, stripe_summary_lists, capsys
+):
+    assert stripe_payments.main(["summary", "--currency", "jpy"]) == 0
+
+    assert capsys.readouterr().out == ""
+    # The totals still come from the real lists, so the account is read even
+    # when the requested currency has no records.
+    assert [
+        request["path"] for request in stripe_summary_lists.requests
+    ] == ["/v1/payment_intents", "/v1/refunds"]
+
+
+def test_cli_summary_with_empty_currency_fails_before_calling_stripe(
+    live_key, stripe_summary_lists, capsys
+):
+    assert stripe_payments.main(["summary", "--currency", ""]) == 2
+
+    assert capsys.readouterr().err.strip() == (
+        "error: --currency must not be empty, got ''"
+    )
+    assert stripe_summary_lists.requests == []
+
+
+def test_module_summary_currency_fails_without_the_secret():
+    """The real user entry point: ``python -m stripe_payments summary --currency usd``."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != stripe_payments.LIVE_SECRET_KEY_ENV
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "stripe_payments",
+            "summary",
+            "--currency",
+            "usd",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+
+    assert result.returncode == 2
+    assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
 
 
 # --- refunds-summary (Issue #224) ---------------------------------------
