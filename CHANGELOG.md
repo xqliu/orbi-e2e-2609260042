@@ -35,6 +35,9 @@
   `customers-<日期>.csv` 同样为中文）；JSON 的 key 保持英文。
 - `export` 子命令写出的文件名带上导出当天的 UTC 日期，例如
   `payments-2026-10-28.csv`，不同天导出的文件不再互相覆盖。
+- `export` 导出的 `payments-<日期>.csv` 新增 `客户邮箱` 列：值取自付款所属
+  Customer 的邮箱，对账时直接看到是谁付的；付款没有 customer、Customer 没有
+  邮箱时该格为空。JSON 的 payments 行相应多出 `customer_email` 键。
 
 ## [v0.6.106] - 2026-09-28
 
