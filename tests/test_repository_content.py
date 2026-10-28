@@ -313,6 +313,19 @@ def test_readme_documents_the_export_format_choices():
         )
 
 
+# Issue #230: the exported file names carry the UTC export date.
+EXPORT_SAMPLE_FILE_NAME = "payments-2026-10-28.csv"
+
+
+def test_readme_documents_the_dated_export_file_names():
+    """Issue #230: the README shows the date suffix on the exported files."""
+    body = _readme_subsection(README_EXPORT_HEADING)
+    assert EXPORT_SAMPLE_FILE_NAME in body, (
+        f"the {README_EXPORT_HEADING!r} section must show the dated export "
+        f"file name {EXPORT_SAMPLE_FILE_NAME!r}"
+    )
+
+
 def test_readme_documents_the_summary_command_output():
     """Issue #221: one currency per line, thousands separators, upper-case."""
     text = _read(README)
