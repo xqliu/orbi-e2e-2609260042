@@ -20,9 +20,9 @@ that talks to the Stripe API with the operator's live secret key.
   delete the JSON files by hand.  The CSV header row is Chinese (Issue #235),
   e.g. ``payments-<date>.csv`` starts with
   ``编号,金额,币种,状态,创建时间``; the JSON keys stay English.
-  ``--customer cus_...`` narrows the export to  one customer's payments and refunds (``payments-<date>.csv`` then carries a
-  ``customer`` column, CSV header ``客户``); omitted, the whole account is
-  exported as before.
+  ``--customer cus_...`` narrows the export to one customer's payments and
+  refunds (``payments-<date>.csv`` then carries a ``customer`` column, CSV
+  header ``客户``); omitted, the whole account is exported as before.
 * ``python -m stripe_payments summary`` prints the payments total, the refunds
   total and the net income per currency, one currency per line, so a daily
   check does not need the exported CSV files.  ``--currency usd`` prints only
@@ -80,7 +80,8 @@ EXPORT_COLUMNS = {
 
 # Issue #235: the CSV header row is written in Chinese, so the operator reads
 # ``编号,金额,币种,状态,创建时间`` in a spreadsheet instead of the internal keys.
-# The JSON files keep the English keys below, so their consumers keep working.
+# The JSON files keep the English keys in EXPORT_COLUMNS, so their consumers
+# keep working.
 EXPORT_HEADERS = {
     "id": "编号",
     "customer": "客户",
