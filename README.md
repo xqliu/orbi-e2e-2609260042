@@ -185,7 +185,24 @@ USD 付款 1,234.57 退款 1.00 净额 1,233.57
 零小数币种（如 JPY、KRW）按文档（<https://docs.stripe.com/currencies>）原样打印
 整数；净额 = 付款 - 退款。账户没有付款和退款时不打印任何行。
 
-失败与修复：缺少 `STRIPE_LIVE_SECRET_KEY` 时命令以退出码 2 结束并报
+只想看某一个币种时传 `--currency`（不区分大小写，例如 `usd` 或 `USD`）：
+
+```sh
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary --currency usd
+```
+
+输出里只有 usd 那一行（其他币种不打印）：
+
+```
+USD 付款 1,234.57 退款 1.00 净额 1,233.57
+```
+
+账户里没有该币种的付款和退款时不打印任何行。不传 `--currency` 时与上面完全一致，
+列出全部币种。
+
+失败与修复：`--currency` 传空字符串时命令以退出码 2 结束并报
+`error: --currency must not be empty, got ''`，此时不会调用 Stripe；改成真实币种
+代码（如 `usd`）后重跑。缺少 `STRIPE_LIVE_SECRET_KEY` 时命令以退出码 2 结束并报
 `error: STRIPE_LIVE_SECRET_KEY is not set...`，补上环境变量后重跑；密钥失效时
 报 Stripe 的 `HTTP 401`，轮换环境 secret 后重跑。
 

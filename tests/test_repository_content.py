@@ -339,6 +339,33 @@ def test_readme_documents_the_summary_command_output():
     )
 
 
+# Issue #234: `summary --currency usd` prints only the usd line.
+def test_readme_documents_the_summary_currency_filter():
+    body = _readme_subsection(README_SUMMARY_HEADING)
+    assert STRIPE_SUMMARY_COMMAND in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show "
+        f"{STRIPE_SUMMARY_COMMAND!r}"
+    )
+    # Every flag the documented summary command passes must be a real flag of
+    # the summary subparser, so the docs cannot drift from the command.
+    flags = {
+        flag
+        for line in body.splitlines()
+        if STRIPE_SUMMARY_COMMAND in line
+        for flag in STRIPE_FLAG_RE.findall(line)
+    }
+    missing_flags = flags - _subparser_option_strings("summary")
+    assert not missing_flags, (
+        f"the README passes {sorted(missing_flags)} to "
+        f"{STRIPE_SUMMARY_COMMAND!r}, but the summary subparser does not "
+        "define them"
+    )
+    assert "--currency usd" in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show "
+        f"{STRIPE_SUMMARY_COMMAND!r} --currency usd"
+    )
+
+
 def test_readme_documents_the_refunds_summary_command_output():
     """Issue #224: one month/currency per line, count and amount."""
     text = _read(README)
