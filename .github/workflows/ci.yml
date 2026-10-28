@@ -34,6 +34,12 @@ permissions:
   contents: read
 
 jobs:
+  base-health:
+    # e2e: deliberately red base check for the newsletter capture; removed after capture
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "base branch health check failing on purpose" && exit 1
   test:
     name: test
     runs-on: ubuntu-latest
