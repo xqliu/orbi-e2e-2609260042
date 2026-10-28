@@ -140,19 +140,22 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --format bot
 STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --customer cus_123 --format csv
 ```
 
-第一行只写 `payments.csv`、`refunds.csv`、`customers.csv`，第二行只写同名的
-`.json`，第三行（以及不传 `--format` 时）两种都写，共六个文件。文件写到
+第一行只写 `payments-2026-10-28.csv`、`refunds-2026-10-28.csv`、
+`customers-2026-10-28.csv`，第二行只写同名的 `.json`，第三行（以及不传
+`--format` 时）两种都写，共六个文件。文件名里的日期是导出当天的 UTC 日期
+（`YYYY-MM-DD`），所以哪天导出的文件一眼就能看出来，不同天导出的文件也不会
+互相覆盖（同一天重复导出会覆盖同名文件）。文件写到
 `--output-dir` 指定的目录，默认是 `export/`（已被 `.gitignore` 忽略）；
 `--limit` 是每次列表请求的条数（1-100，默认 10），所有记录都会被导出。命令打印
 `exported payments=... refunds=... customers=... to export/`。
 
 只导出某个客户时传 `--customer cus_...`（第四行）：Stripe 的 PaymentIntents
-列表按这个 `customer` 过滤，所以 `payments.csv` 每一行都是该客户，并多出一列
-`customer`，值取自每笔付款记录本身（因为列表已被过滤，它就是传入的这个 id）；
-退款列表本身没有 customer 过滤，命令只保留那些
+列表按这个 `customer` 过滤，所以 `payments-<日期>.csv` 每一行都是该客户，并多出
+一列 `customer`，值取自每笔付款记录本身（因为列表已被过滤，它就是传入的这个
+id）；退款列表本身没有 customer 过滤，命令只保留那些
 `payment_intent` 属于该客户付款的退款。不传 `--customer` 时导出的文件与以前完全
-一样（没有 `customer` 列、包含账户全部记录）。`customers.csv` 仍是账户的客户
-列表，不随 `--customer` 收窄。
+一样（没有 `customer` 列、包含账户全部记录）。`customers-<日期>.csv` 仍是账户的
+客户列表，不随 `--customer` 收窄。
 
 失败与修复：`--format` 只接受 `csv`、`json`、`both`，填别的值时命令以退出码 2
 结束并报 `argument --format: invalid choice: 'xml' (choose from 'csv', 'json',

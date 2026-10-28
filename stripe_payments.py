@@ -13,10 +13,12 @@ that talks to the Stripe API with the operator's live secret key.
   the exact command the manual, protected CI verification run executes.
 * ``python -m stripe_payments export`` lists the account's PaymentIntents,
   Refunds and Customers and writes them into a directory, so the operator can
-  take the data elsewhere.  ``--format csv|json|both`` picks the file types
+  take the data elsewhere.  Every file name carries the export date (UTC), so
+  ``payments-2026-10-28.csv`` from one day never overwrites the file exported
+  on another day.  ``--format csv|json|both`` picks the file types
   (``both`` by default), so an operator who only needs CSV no longer has to
   delete the JSON files by hand.  ``--customer cus_...`` narrows the export to
-  one customer's payments and refunds (``payments.csv`` then carries a
+  one customer's payments and refunds (``payments-<date>.csv`` then carries a
   ``customer`` column); omitted, the whole account is exported as before.
 * ``python -m stripe_payments summary`` prints the payments total, the refunds
   total and the net income per currency, one currency per line, so a daily
@@ -192,7 +194,8 @@ def export_data(
 
     Every page of all three lists is fetched before any file is written, so a
     failing Stripe call (anywhere in the pagination) leaves no half-written
-    export behind.
+    export behind.  The files are named after the export date (Issue #230),
+    e.g. ``payments-2026-10-28.csv``, so exports from different days coexist.
     """
     stripe.api_key = live_secret_key()
     payment_filters = {"customer": customer} if customer else {}
@@ -219,14 +222,17 @@ def export_data(
 
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
+    date = export_date()
     for category, columns in EXPORT_COLUMNS.items():
         if category == "payments" and customer is not None:
             columns = _payment_columns()
         category_rows = rows[category]
         if "csv" in formats:
-            _write_csv(directory / f"{category}.csv", columns, category_rows)
+            _write_csv(
+                directory / f"{category}-{date}.csv", columns, category_rows
+            )
         if "json" in formats:
-            _write_json(directory / f"{category}.json", category_rows)
+            _write_json(directory / f"{category}-{date}.json", category_rows)
     return len(rows["payments"]), len(rows["refunds"]), len(rows["customers"])
 
 
@@ -302,6 +308,15 @@ def _created(value: object) -> str:
     return datetime.fromtimestamp(int(value), tz=timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
+
+
+def export_date() -> str:
+    """The date in the exported file names: today in UTC (``YYYY-MM-DD``).
+
+    UTC keeps the name identical no matter which machine or time zone runs
+    the export, matching the UTC timestamps the exported rows carry.
+    """
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
 def _payment_columns() -> tuple[str, ...]:

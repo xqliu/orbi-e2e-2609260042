@@ -402,6 +402,22 @@ def _list_payload(*items, has_more=False):
     return {"object": "list", "data": list(items), "has_more": has_more}
 
 
+# Issue #230: every exported file carries the UTC export date in its name.
+EXPORT_DATE = "2026-10-28"
+
+
+@pytest.fixture
+def export_date(monkeypatch):
+    """Pin the export date, so the exported file names are deterministic."""
+    monkeypatch.setattr(stripe_payments, "export_date", lambda: EXPORT_DATE)
+    return EXPORT_DATE
+
+
+def _export_file(output_dir, name, extension, date=EXPORT_DATE):
+    """The dated export file, e.g. ``payments-2026-10-28.csv``."""
+    return output_dir / f"{name}-{date}.{extension}"
+
+
 @pytest.fixture
 def stripe_lists(stripe_api):
     """The three GET list responses the export command reads."""
@@ -445,7 +461,7 @@ def stripe_lists(stripe_api):
 
 
 def test_cli_export_writes_csv_and_json_for_every_category(
-    live_key, stripe_lists, tmp_path, capsys
+    live_key, stripe_lists, export_date, tmp_path, capsys
 ):
     output_dir = tmp_path / "export"
     exit_code = stripe_payments.main(["export", "--output-dir", str(output_dir)])
@@ -462,7 +478,9 @@ def test_cli_export_writes_csv_and_json_for_every_category(
     csv_rows = {
         name: list(
             csv.reader(
-                (output_dir / f"{name}.csv").open(newline="", encoding="utf-8")
+                _export_file(output_dir, name, "csv").open(
+                    newline="", encoding="utf-8"
+                )
             )
         )
         for name in ("payments", "refunds", "customers")
@@ -483,7 +501,7 @@ def test_cli_export_writes_csv_and_json_for_every_category(
 
     json_data = {
         name: json.loads(
-            (output_dir / f"{name}.json").read_text(encoding="utf-8")
+            _export_file(output_dir, name, "json").read_text(encoding="utf-8")
         )
         for name in ("payments", "refunds", "customers")
     }
@@ -540,7 +558,7 @@ def test_export_queries_the_three_documented_list_endpoints(
 
 
 def test_cli_export_format_narrows_the_written_files(
-    live_key, stripe_lists, tmp_path
+    live_key, stripe_lists, export_date, tmp_path
 ):
     csv_dir = tmp_path / "csv"
     json_dir = tmp_path / "json"
@@ -551,9 +569,9 @@ def test_cli_export_format_narrows_the_written_files(
         == 0
     )
     assert sorted(path.name for path in csv_dir.iterdir()) == [
-        "customers.csv",
-        "payments.csv",
-        "refunds.csv",
+        "customers-2026-10-28.csv",
+        "payments-2026-10-28.csv",
+        "refunds-2026-10-28.csv",
     ]
     assert (
         stripe_payments.main(
@@ -562,13 +580,15 @@ def test_cli_export_format_narrows_the_written_files(
         == 0
     )
     assert sorted(path.name for path in json_dir.iterdir()) == [
-        "customers.json",
-        "payments.json",
-        "refunds.json",
+        "customers-2026-10-28.json",
+        "payments-2026-10-28.json",
+        "refunds-2026-10-28.json",
     ]
 
 
-def test_cli_export_format_both_writes_both_files(live_key, stripe_lists, tmp_path):
+def test_cli_export_format_both_writes_both_files(
+    live_key, stripe_lists, export_date, tmp_path
+):
     output_dir = tmp_path / "both"
     assert (
         stripe_payments.main(
@@ -577,16 +597,16 @@ def test_cli_export_format_both_writes_both_files(live_key, stripe_lists, tmp_pa
         == 0
     )
     assert sorted(path.name for path in output_dir.iterdir()) == [
-        "customers.csv",
-        "customers.json",
-        "payments.csv",
-        "payments.json",
-        "refunds.csv",
-        "refunds.json",
+        "customers-2026-10-28.csv",
+        "customers-2026-10-28.json",
+        "payments-2026-10-28.csv",
+        "payments-2026-10-28.json",
+        "refunds-2026-10-28.csv",
+        "refunds-2026-10-28.json",
     ]
     # Explicit `both` writes the same content as the default (no flag).
     assert json.loads(
-        (output_dir / "payments.json").read_text(encoding="utf-8")
+        _export_file(output_dir, "payments", "json").read_text(encoding="utf-8")
     ) == [
         {
             "id": "pi_1",
@@ -597,7 +617,11 @@ def test_cli_export_format_both_writes_both_files(live_key, stripe_lists, tmp_pa
         }
     ]
     csv_header = next(
-        csv.reader((output_dir / "payments.csv").open(newline="", encoding="utf-8"))
+        csv.reader(
+            _export_file(output_dir, "payments", "csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
     )
     assert csv_header == [
         "id",
@@ -606,6 +630,43 @@ def test_cli_export_format_both_writes_both_files(live_key, stripe_lists, tmp_pa
         "status",
         "created",
     ]
+
+
+def test_export_file_names_carry_todays_utc_date(live_key, stripe_lists, tmp_path):
+    """Issue #230: by default every file is named after today's UTC date."""
+    output_dir = tmp_path / "export"
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    assert stripe_payments.main(["export", "--output-dir", str(output_dir)]) == 0
+
+    # A run that crosses midnight UTC may legitimately use either day; the
+    # test reads it independently from the implementation.
+    dates = {today, datetime.now(timezone.utc).strftime("%Y-%m-%d")}
+    names = {path.name for path in output_dir.iterdir()}
+    assert len(names) == 6
+    for name in ("payments", "refunds", "customers"):
+        for extension in ("csv", "json"):
+            assert any(
+                f"{name}-{date}.{extension}" in names for date in dates
+            ), f"missing a dated {name}.{extension}: {sorted(names)}"
+
+
+def test_exports_from_different_days_keep_both_file_sets(
+    live_key, stripe_lists, tmp_path, monkeypatch
+):
+    """Issue #230: yesterday's export is not overwritten by today's."""
+    output_dir = tmp_path / "export"
+    monkeypatch.setattr(stripe_payments, "export_date", lambda: "2026-10-27")
+    assert stripe_payments.main(["export", "--output-dir", str(output_dir)]) == 0
+    monkeypatch.setattr(stripe_payments, "export_date", lambda: "2026-10-28")
+    assert stripe_payments.main(["export", "--output-dir", str(output_dir)]) == 0
+
+    assert sorted(path.name for path in output_dir.iterdir()) == sorted(
+        f"{name}-{date}.{extension}"
+        for date in ("2026-10-27", "2026-10-28")
+        for name in ("payments", "refunds", "customers")
+        for extension in ("csv", "json")
+    )
 
 
 def test_cli_export_without_the_secret_creates_nothing(
@@ -759,13 +820,17 @@ def _customer(index):
 
 def _csv_data_rows(output_dir, name):
     rows = list(
-        csv.reader((output_dir / f"{name}.csv").open(newline="", encoding="utf-8"))
+        csv.reader(
+            _export_file(output_dir, name, "csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
     )
     return rows[1:]
 
 
 def test_export_follows_pagination_to_the_end(
-    live_key, stripe_api, tmp_path, capsys
+    live_key, stripe_api, export_date, tmp_path, capsys
 ):
     """The first page is followed to ``has_more: false`` (Issue #112)."""
     stripe_api.list_payloads = {
@@ -807,7 +872,7 @@ def test_export_follows_pagination_to_the_end(
     ]
 
     json_payments = json.loads(
-        (output_dir / "payments.json").read_text(encoding="utf-8")
+        _export_file(output_dir, "payments", "json").read_text(encoding="utf-8")
     )
     assert [row["id"] for row in json_payments] == ["pi_1", "pi_2", "pi_3"]
 
@@ -1187,12 +1252,16 @@ def stripe_customer_lists(stripe_api):
 
 def _csv_rows(output_dir, name):
     return list(
-        csv.reader((output_dir / f"{name}.csv").open(newline="", encoding="utf-8"))
+        csv.reader(
+            _export_file(output_dir, name, "csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
     )
 
 
 def test_cli_export_customer_exports_only_that_customers_payments_and_refunds(
-    live_key, stripe_customer_lists, tmp_path, capsys
+    live_key, stripe_customer_lists, export_date, tmp_path, capsys
 ):
     output_dir = tmp_path / "export"
     exit_code = stripe_payments.main(
@@ -1233,7 +1302,7 @@ def test_cli_export_customer_exports_only_that_customers_payments_and_refunds(
     ]
 
     assert json.loads(
-        (output_dir / "payments.json").read_text(encoding="utf-8")
+        _export_file(output_dir, "payments", "json").read_text(encoding="utf-8")
     ) == [
         {
             "id": "pi_1",
@@ -1247,7 +1316,7 @@ def test_cli_export_customer_exports_only_that_customers_payments_and_refunds(
 
 
 def test_export_without_customer_sends_no_customer_parameter_and_keeps_the_columns(
-    live_key, stripe_lists, tmp_path
+    live_key, stripe_lists, export_date, tmp_path
 ):
     """Not passing --customer keeps the export exactly as it was."""
     output_dir = tmp_path / "export"
@@ -1264,12 +1333,12 @@ def test_export_without_customer_sends_no_customer_parameter_and_keeps_the_colum
         "created",
     ]
     assert "customer" not in json.loads(
-        (output_dir / "payments.json").read_text(encoding="utf-8")
+        _export_file(output_dir, "payments", "json").read_text(encoding="utf-8")
     )[0]
 
 
 def test_export_customer_column_comes_from_the_payment_record(
-    live_key, stripe_customer_lists, tmp_path
+    live_key, stripe_customer_lists, export_date, tmp_path
 ):
     """The column reports the row's own customer, never the CLI argument.
 
@@ -1313,7 +1382,7 @@ def test_export_customer_column_comes_from_the_payment_record(
 
 
 def test_export_customer_without_payments_writes_no_payment_and_no_refund(
-    live_key, stripe_api, tmp_path, capsys
+    live_key, stripe_api, export_date, tmp_path, capsys
 ):
     stripe_api.list_payloads = {
         "/v1/payment_intents": _list_payload(),
