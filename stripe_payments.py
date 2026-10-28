@@ -30,7 +30,10 @@ that talks to the Stripe API with the operator's live secret key.
 * ``python -m stripe_payments summary`` prints the payments total, the refunds
   total and the net income per currency, one currency per line, so a daily
   check does not need the exported CSV files.  ``--currency usd`` prints only
-  that currency's line; omitted, every currency is printed.
+  that currency's line; omitted, every currency is printed.  ``--csv`` also
+  writes those same rows to ``summary-<date>.csv`` (one column per summary
+  field, so a spreadsheet shows them side by side); omitted, the command only
+  prints, as before.
 * ``python -m stripe_payments refunds-summary`` prints the refund count and
   amount per month and currency, one line per month and currency, so the
   refunds of a month can be read without filtering the exported CSV files.
@@ -92,7 +95,7 @@ EXPORT_COLUMNS = {
 # Issue #235: the CSV header row is written in Chinese, so the operator reads
 # ``编号,金额,币种,状态,创建时间`` in a spreadsheet instead of the internal keys.
 # The JSON files keep the English keys in EXPORT_COLUMNS, so their consumers
-# keep working.
+# keep working.  The same table names the summary CSV columns (Issue #240).
 EXPORT_HEADERS = {
     "id": "编号",
     "customer": "客户",
@@ -103,7 +106,14 @@ EXPORT_HEADERS = {
     "status": "状态",
     "created": "创建时间",
     "email": "邮箱",
+    "payments": "付款",
+    "refunds": "退款",
+    "net": "净额",
 }
+
+# Issue #240: the summary CSV columns.  A row carries exactly the fields the
+# printed summary line carries, so both come from the same ``_summary_row()``.
+SUMMARY_COLUMNS = ("currency", "payments", "refunds", "net")
 
 # Stripe keeps amounts in the smallest currency unit, but these currencies have
 # no minor unit: 500 is 500 JPY, not 5.00 JPY (docs.stripe.com/currencies,
@@ -337,13 +347,36 @@ def format_amount(amount: int, currency: str) -> str:
     return f"{_format_number(amount, currency)} {currency.upper()}"
 
 
+def _summary_row(currency: str, payments: int, refunds: int) -> dict:
+    """The summary fields: the printed line and the CSV row share them."""
+    return {
+        "currency": currency.upper(),
+        "payments": _format_number(payments, currency),
+        "refunds": _format_number(refunds, currency),
+        "net": _format_number(payments - refunds, currency),
+    }
+
+
 def _summary_line(currency: str, payments: int, refunds: int) -> str:
     """One summary line for a currency, e.g. ``USD 付款 1,234.56 ...``."""
+    row = _summary_row(currency, payments, refunds)
     return (
-        f"{currency.upper()} 付款 {_format_number(payments, currency)} "
-        f"退款 {_format_number(refunds, currency)} "
-        f"净额 {_format_number(payments - refunds, currency)}"
+        f"{row['currency']} 付款 {row['payments']} "
+        f"退款 {row['refunds']} 净额 {row['net']}"
     )
+
+
+def write_summary_csv(rows: Sequence[dict], *, output_dir: str) -> Path:
+    """Write the summary rows to ``<output_dir>/summary-<date>.csv``.
+
+    The file name carries the UTC export date like the ``export`` files do
+    (Issue #230), so two days of summaries do not overwrite each other.
+    """
+    directory = Path(output_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"summary-{export_date()}.csv"
+    _write_csv(path, SUMMARY_COLUMNS, rows)
+    return path
 
 
 def _created(value: object) -> str:
@@ -480,6 +513,22 @@ def _parser() -> argparse.ArgumentParser:
             "omitted, every currency is printed"
         ),
     )
+    summary.add_argument(
+        "--csv",
+        action="store_true",
+        help=(
+            "also write the printed rows to summary-<date>.csv "
+            f"(one column per summary field, in {DEFAULT_OUTPUT_DIR}/ by default)"
+        ),
+    )
+    summary.add_argument(
+        "--output-dir",
+        default=DEFAULT_OUTPUT_DIR,
+        help=(
+            "directory the --csv file is written into "
+            f"(default {DEFAULT_OUTPUT_DIR})"
+        ),
+    )
 
     subcommands.add_parser(
         "refunds-summary",
@@ -562,11 +611,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                         f"--currency must not be empty, got {args.currency!r}"
                     )
             totals = summarize_data()
+            rows = []
             for code in sorted(totals):
                 if currency is not None and code != currency:
                     continue
                 payments, refunds = totals[code]
                 print(_summary_line(code, payments, refunds))
+                rows.append(_summary_row(code, payments, refunds))
+            if args.csv:
+                path = write_summary_csv(rows, output_dir=args.output_dir)
+                print(f"exported summary rows={len(rows)} to {path}")
             return 0
         if args.command == "refunds-summary":
             refund_totals = summarize_refunds_by_month()

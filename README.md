@@ -211,11 +211,38 @@ USD 付款 1,234.57 退款 1.00 净额 1,233.57
 账户里没有该币种的付款和退款时不打印任何行。不传 `--currency` 时与上面完全一致，
 列出全部币种。
 
+想把这份汇总同时导出成 CSV（拿去 Excel 对账）时加 `--csv`：
+
+```sh
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary --csv
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary --csv --output-dir 对账
+```
+
+终端输出的汇总行与上面完全一致，另外多打印一行
+`exported summary rows=2 to export/summary-2026-10-28.csv`。CSV 写到 `--output-dir`
+指定的目录，默认是 `export/`（和 `export` 子命令同一个目录，已被 `.gitignore`
+忽略）；文件名带导出当天的 UTC 日期（`YYYY-MM-DD`），所以不同天的汇总不会互相
+覆盖（同一天重复导出会覆盖同名文件）。CSV 第一行是中文表头
+`币种,付款,退款,净额`，之后每个币种一行（排序与打印顺序一致），每一格就是上面打印行
+里的同一个值：
+
+```
+币种,付款,退款,净额
+EUR,10.00,0.00,10.00
+USD,"1,234.57",1.00,"1,233.57"
+```
+
+金额带千分位逗号时 CSV 自动加引号（`"1,234.57"`），所以用 Excel 打开时
+`币种`、`付款`、`退款`、`净额` 各占一列，一个金额不会被拆成两列。`--currency usd`
+与 `--csv` 一起用时，打印和 CSV 都只有 usd 那一行；账户没有付款和退款时终端不打印
+汇总行，CSV 只写表头一行。不加 `--csv` 时和以前一样只打印、不写文件。
+
 失败与修复：`--currency` 传空字符串时命令以退出码 2 结束并报
 `error: --currency must not be empty, got ''`，此时不会调用 Stripe；改成真实币种
 代码（如 `usd`）后重跑。缺少 `STRIPE_LIVE_SECRET_KEY` 时命令以退出码 2 结束并报
 `error: STRIPE_LIVE_SECRET_KEY is not set...`，补上环境变量后重跑；密钥失效时
-报 Stripe 的 `HTTP 401`，轮换环境 secret 后重跑。
+报 Stripe 的 `HTTP 401`，轮换环境 secret 后重跑。加上 `--csv` 时，这些失败都发生在
+写文件之前，不会留下空的或不完整的 CSV；补好配置重跑即可。
 
 ### 按月汇总退款（refunds-summary）
 
