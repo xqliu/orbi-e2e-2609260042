@@ -20,6 +20,13 @@ def test_format_amount_keeps_zero_decimal_currencies_integer():
     assert format_amount(1234567, "krw") == "1,234,567 KRW"
 
 
+def test_format_amount_treats_ugx_as_the_two_decimal_value_stripe_documents():
+    # Stripe's "Special cases" (docs.stripe.com/currencies) says UGX amounts are
+    # represented as a two-decimal value: to charge 5 UGX, pass 500.  A UGX
+    # total must therefore not be printed as the raw integer.
+    assert format_amount(500, "ugx") == "5.00 UGX"
+
+
 def test_format_amount_formats_negative_amounts_without_losing_the_sign():
     assert format_amount(-50, "usd") == "-0.50 USD"
     assert format_amount(-123456, "usd") == "-1,234.56 USD"

@@ -70,8 +70,11 @@ EXPORT_COLUMNS = {
 # Stripe keeps amounts in the smallest currency unit, but these currencies have
 # no minor unit: 500 is 500 JPY, not 5.00 JPY (docs.stripe.com/currencies,
 # "Zero-decimal currencies").  Every other currency uses two decimals.
+# UGX is listed as zero-decimal on that page, but the "Special cases" section on
+# the same page requires its amount values to be the two-decimal value (500
+# means 5 UGX), so UGX is formatted like the two-decimal currencies.
 ZERO_DECIMAL_CURRENCIES = frozenset(
-    "bif clp djf gnf jpy kmf krw mga pyg rwf ugx vnd vuv xaf xof xpf".split()
+    "bif clp djf gnf jpy kmf krw mga pyg rwf vnd vuv xaf xof xpf".split()
 )
 
 
