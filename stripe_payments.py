@@ -21,6 +21,9 @@ that talks to the Stripe API with the operator's live secret key.
 * ``python -m stripe_payments summary`` prints the payments total, the refunds
   total and the net income per currency, one currency per line, so a daily
   check does not need the exported CSV files.
+* ``python -m stripe_payments refunds-summary`` prints the refund count and
+  amount per month and currency, one line per month and currency, so the
+  refunds of a month can be read without filtering the exported CSV files.
 
 The live secret key is read from the ``STRIPE_LIVE_SECRET_KEY`` environment
 variable (an environment secret of the protected ``stripe-live`` GitHub
@@ -245,6 +248,32 @@ def summarize_data() -> dict[str, tuple[int, int]]:
     }
 
 
+def summarize_refunds_by_month() -> dict[tuple[str, str], tuple[int, int]]:
+    """Return ``{(YYYY-MM, currency): (count, amount)}`` for every refund.
+
+    The month comes from the refund's ``created`` timestamp in UTC, which is
+    the time Stripe's dashboard shows.  Every page of the Refunds list is
+    read, so the totals cover the whole account.
+    """
+    stripe.api_key = live_secret_key()
+    totals: dict[tuple[str, str], list[int]] = {}
+    for refund in _list_all(stripe.Refund, limit=DEFAULT_LIMIT):
+        month = datetime.fromtimestamp(
+            int(refund.created), tz=timezone.utc
+        ).strftime("%Y-%m")
+        entry = totals.setdefault((month, refund.currency.lower()), [0, 0])
+        entry[0] += 1
+        entry[1] += refund.amount
+    return {
+        key: (count, amount) for key, (count, amount) in totals.items()
+    }
+
+
+def _refund_month_line(month: str, currency: str, count: int, amount: int) -> str:
+    """One refunds-summary line, e.g. ``2026-10 usd 退款 2 笔 3.50``."""
+    return f"{month} {currency} 退款 {count} 笔 {_format_number(amount, currency)}"
+
+
 def _format_number(amount: int, currency: str) -> str:
     """Format a Stripe minor-unit amount without the currency code."""
     if currency.lower() in ZERO_DECIMAL_CURRENCIES:
@@ -375,6 +404,14 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
 
+    subcommands.add_parser(
+        "refunds-summary",
+        help=(
+            "print the refund count and amount per month and currency, "
+            "one line per month and currency"
+        ),
+    )
+
     export = subcommands.add_parser(
         "export",
         help="export payments, refunds and customers to CSV and JSON files",
@@ -444,6 +481,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             for currency in sorted(totals):
                 payments, refunds = totals[currency]
                 print(_summary_line(currency, payments, refunds))
+            return 0
+        if args.command == "refunds-summary":
+            refund_totals = summarize_refunds_by_month()
+            for month, currency in sorted(refund_totals):
+                count, amount = refund_totals[(month, currency)]
+                print(_refund_month_line(month, currency, count, amount))
             return 0
         if args.limit < 1 or args.limit > MAX_LIMIT:
             raise ConfigurationError(

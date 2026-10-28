@@ -186,6 +186,31 @@ USD 付款 1,234.57 退款 1.00 净额 1,233.57
 `error: STRIPE_LIVE_SECRET_KEY is not set...`，补上环境变量后重跑；密钥失效时
 报 Stripe 的 `HTTP 401`，轮换环境 secret 后重跑。
 
+### 按月汇总退款（refunds-summary）
+
+`refunds-summary` 子命令在终端按「退款创建月份（UTC）+ 币种」逐行打印退款笔数和
+退款金额，不用再打开 CSV 自己筛：
+
+```sh
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments refunds-summary
+```
+
+每月每个币种一行（先按月份、再按币种代码排序），例如 10 月有两笔 usd 退款
+1.00 和 2.50 时，输出里有：
+
+```
+2026-10 usd 退款 2 笔 3.50
+```
+
+月份取退款记录 `created` 时间戳的 UTC 年月，币种保持 Stripe 返回的小写代码；金额
+按与 `summary` 相同的最小货币单位规则换算（两位小数币种除以 100，JPY、KRW 等
+零小数币种按文档原样打印，见 <https://docs.stripe.com/currencies>）。账户没有退款
+记录时不打印任何行。
+
+失败与修复：缺少 `STRIPE_LIVE_SECRET_KEY` 时命令以退出码 2 结束并报
+`error: STRIPE_LIVE_SECRET_KEY is not set...`，补上环境变量后重跑；密钥失效时
+报 Stripe 的 `HTTP 401`，轮换环境 secret 后重跑。
+
 ## FAQ
 
 ### Q：这个仓库是什么？为什么不接受 PR？
