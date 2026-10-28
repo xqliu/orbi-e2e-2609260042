@@ -49,6 +49,9 @@ that talks to the Stripe API with the operator's live secret key.
   refunds of a week can be read without filtering the exported CSV files.
   The week comes from the refund's ``created`` timestamp in UTC and is the
   ISO 8601 week (Monday to Sunday), labelled like ``2026-W44``.
+* ``python -m stripe_payments --version`` prints the version number of this
+  entry point (``stripe_payments <version>``) and exits 0, so a run can be
+  tied to a release without reading the source.
 
 The live secret key is read from the ``STRIPE_LIVE_SECRET_KEY`` environment
 variable (an environment secret of the protected ``stripe-live`` GitHub
@@ -71,6 +74,11 @@ import stripe
 
 LIVE_SECRET_KEY_ENV = "STRIPE_LIVE_SECRET_KEY"
 LIVE_SECRET_KEY_PREFIX = "sk_live_"
+
+# Issue #254: the version `python -m stripe_payments --version` prints.  It is
+# the latest released version of CHANGELOG.md, so the number a run prints and
+# the release notes name the same version.
+VERSION = "0.6.106"
 
 # Stripe's smallest USD charge is 0.50 (amounts are in the smallest currency
 # unit), so it is the default for the live verification run.
@@ -608,6 +616,12 @@ def _write_json(path: Path, rows: Sequence[dict]) -> None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="stripe_payments", description=__doc__)
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {VERSION}",
+        help="print the version number and exit",
+    )
     subcommands = parser.add_subparsers(dest="command", required=True)
 
     checkout = subcommands.add_parser(

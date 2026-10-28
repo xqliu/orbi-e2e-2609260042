@@ -21,6 +21,7 @@ FEATURE_REQUEST_TEMPLATE = (
     REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "feature-request.md"
 )
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 
 # Issue #104: the CI `live payment verification` job runs the `verify`
 # subcommand; the content check below asserts every flag after that command
@@ -40,6 +41,9 @@ REFUNDS_SUMMARY_SAMPLE_LINE = "2026-W44 usd 退款 2 笔 3.50"
 README_EXPORT_HEADING = "### 导出付款数据（export）"
 README_SUMMARY_HEADING = "### 汇总收入（summary）"
 README_REFUNDS_SUMMARY_HEADING = "### 按周汇总退款（refunds-summary）"
+# Issue #254: the top-level `--version` flag and the line it prints.
+STRIPE_VERSION_COMMAND = "python -m stripe_payments --version"
+README_VERSION_HEADING = "### 查看版本（--version）"
 # The sample data the README section describes: ISO 第 40 周一笔 usd 0.50，第 44 周
 # 一笔 eur 1.00 加两笔 usd 1.00、2.50。The expected lines are rendered through the
 # real `_refund_week_line()` below, so the docs cannot drift from the output.
@@ -560,4 +564,33 @@ def test_live_payment_verification_cannot_run_on_push_or_pull_request():
     )
     assert "continue-on-error" not in text, (
         "a failed live charge must fail the workflow, never pass silently"
+    )
+
+
+def test_readme_documents_the_version_command():
+    """Issue #254: the README shows `--version` and the line it prints."""
+    option_strings = {
+        option
+        for action in stripe_payments._parser()._actions
+        for option in action.option_strings
+    }
+    assert "--version" in option_strings, (
+        "the top-level parser must define --version"
+    )
+    body = _readme_subsection(README_VERSION_HEADING)
+    assert STRIPE_VERSION_COMMAND in body, (
+        f"the {README_VERSION_HEADING!r} section must show "
+        f"{STRIPE_VERSION_COMMAND!r}"
+    )
+    # The documented output is the line the command really prints.
+    version_line = f"stripe_payments {stripe_payments.VERSION}"
+    assert version_line in body, (
+        f"the {README_VERSION_HEADING!r} section must show the version line "
+        f"{version_line!r}"
+    )
+    # The printed version is the latest released version of the changelog,
+    # so the number a run prints and the release notes cannot drift apart.
+    assert f"## [v{stripe_payments.VERSION}]" in _read(CHANGELOG), (
+        f"CHANGELOG.md needs a [v{stripe_payments.VERSION}] release entry "
+        "matching the printed version"
     )
