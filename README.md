@@ -128,6 +128,28 @@ If `pytest` or `stripe` is not installed, `python -m pytest` fails with
    密钥失效时日志报出 Stripe 的 `HTTP 401`。补上或轮换环境 secret、重新发起运行
    并批准即可，不需要改代码。
 
+### 导出付款数据（export）
+
+`export` 子命令把账户的 PaymentIntents、Refunds、Customers 写成文件；`--format`
+决定写哪几种，不传时和以前一样两种都写，所以只要 CSV 时不必再手动删 JSON：
+
+```sh
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --format csv
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --format json
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --format both
+```
+
+第一行只写 `payments.csv`、`refunds.csv`、`customers.csv`，第二行只写同名的
+`.json`，第三行（以及不传 `--format` 时）两种都写，共六个文件。文件写到
+`--output-dir` 指定的目录，默认是 `export/`（已被 `.gitignore` 忽略）；
+`--limit` 是每次列表请求的条数（1-100，默认 10），所有记录都会被导出。命令打印
+`exported payments=... refunds=... customers=... to export/`。
+
+失败与修复：`--format` 只接受 `csv`、`json`、`both`，填别的值时命令以退出码 2
+结束并报 `argument --format: invalid choice: 'xml' (choose from 'csv', 'json',
+'both')`，此时不会调用 Stripe、也不会创建目录；按提示改成这三档之一再运行。缺少
+`STRIPE_LIVE_SECRET_KEY` 时同样以退出码 2 报出变量名，补上环境变量后重跑。
+
 ## FAQ
 
 ### Q：这个仓库是什么？为什么不接受 PR？
