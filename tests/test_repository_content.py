@@ -557,6 +557,27 @@ def test_readme_shows_the_complete_refunds_summary_output():
     )
 
 
+# Issue #257: the `test (20)` / `test (22)` base-branch checks only exist
+# because the CI `test` job runs the repository entry point once per supported
+# Node.js major version.  A missing matrix or a missing run step would leave
+# `main` with no real test check at all.
+CI_TEST_MATRIX = "node-version: [20, 22]"
+CI_TEST_COMMAND = "python -m pytest -q"
+
+
+def test_ci_test_job_runs_the_repository_pytest_command():
+    """Issue #257: `test (20)` / `test (22)` must stay real pytest runs."""
+    text = _read(WORKFLOW)
+    assert CI_TEST_MATRIX in text, (
+        "the CI test job must run once per Node.js major version, expected "
+        f"{CI_TEST_MATRIX!r}"
+    )
+    assert CI_TEST_COMMAND in text, (
+        "the CI test job must run the repository entry point, expected a step "
+        f"with {CI_TEST_COMMAND!r}"
+    )
+
+
 def test_live_payment_verification_cannot_run_on_push_or_pull_request():
     text = _read(WORKFLOW)
     assert "github.event_name == 'workflow_dispatch'" in text, (
