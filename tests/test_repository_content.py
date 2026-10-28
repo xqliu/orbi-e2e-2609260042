@@ -33,6 +33,19 @@ SUMMARY_SAMPLE_LINE = "USD 付款 1,234.57 退款 1.00 净额 1,233.57"
 # Issue #224: the README documents the refunds-summary command and its line format.
 STRIPE_REFUNDS_SUMMARY_COMMAND = "python -m stripe_payments refunds-summary"
 REFUNDS_SUMMARY_SAMPLE_LINE = "2026-10 usd 退款 2 笔 3.50"
+# Issue #225: the refunds-summary usage sits next to the export and summary
+# sections and shows the complete output the command prints.
+README_EXPORT_HEADING = "### 导出付款数据（export）"
+README_SUMMARY_HEADING = "### 汇总收入（summary）"
+README_REFUNDS_SUMMARY_HEADING = "### 按月汇总退款（refunds-summary）"
+# The sample data the README section describes: 9 月一笔 usd 0.50，10 月一笔
+# eur 1.00 加两笔 usd 1.00、2.50。The expected lines are rendered through the
+# real `_refund_month_line()` below, so the docs cannot drift from the output.
+REFUNDS_SUMMARY_SAMPLE_DATA = (
+    ("2026-09", "usd", 1, 50),
+    ("2026-10", "eur", 1, 100),
+    ("2026-10", "usd", 2, 350),
+)
 # Issue #218: the export command takes exactly these `--format` choices.
 EXPORT_FORMATS = ("csv", "json", "both")
 STRIPE_FLAG_RE = re.compile(r"--[a-z][a-z-]*")
@@ -324,6 +337,59 @@ def test_readme_documents_the_refunds_summary_command_output():
     assert REFUNDS_SUMMARY_SAMPLE_LINE in text, (
         f"the README must show the refunds-summary line "
         f"{REFUNDS_SUMMARY_SAMPLE_LINE!r}"
+    )
+
+
+def _readme_subsection(heading: str) -> str:
+    """Return the body of a `### ` README subsection, up to the next heading."""
+    text = _read(README)
+    assert f"\n{heading}\n" in text, f"the README needs a {heading!r} section"
+    body = text.split(f"\n{heading}\n", 1)[1]
+    for marker in ("\n## ", "\n### "):
+        body = body.split(marker, 1)[0]
+    return body
+
+
+def test_readme_documents_the_refunds_summary_usage_next_to_export_and_summary():
+    """Issue #225: the usage sits with the export and summary sections."""
+    text = _read(README)
+    headings = (
+        README_EXPORT_HEADING,
+        README_SUMMARY_HEADING,
+        README_REFUNDS_SUMMARY_HEADING,
+    )
+    positions = [text.index(heading) for heading in headings]
+    assert positions == sorted(positions), (
+        f"the README must document {', '.join(headings)} in that order"
+    )
+    body = _readme_subsection(README_REFUNDS_SUMMARY_HEADING)
+    assert STRIPE_REFUNDS_SUMMARY_COMMAND in body, (
+        f"the {README_REFUNDS_SUMMARY_HEADING!r} section must show how to run "
+        f"{STRIPE_REFUNDS_SUMMARY_COMMAND!r}"
+    )
+    # `refunds-summary` takes no options, so the documented command cannot pass
+    # a flag the subparser does not define.
+    flags = set(STRIPE_FLAG_RE.findall(body))
+    missing_flags = flags - _subparser_option_strings("refunds-summary")
+    assert not missing_flags, (
+        f"the README passes {sorted(missing_flags)} to "
+        f"{STRIPE_REFUNDS_SUMMARY_COMMAND!r}, but the refunds-summary "
+        "subparser does not define them"
+    )
+
+
+def test_readme_shows_the_complete_refunds_summary_output():
+    """Issue #225: the section shows the complete output, in the real order."""
+    body = _readme_subsection(README_REFUNDS_SUMMARY_HEADING)
+    expected = "\n".join(
+        stripe_payments._refund_month_line(month, currency, count, amount)
+        for month, currency, count, amount in REFUNDS_SUMMARY_SAMPLE_DATA
+    )
+    # The whole block is documented verbatim, so the reader sees every line in
+    # the documented (month, currency) sort order instead of a single sample.
+    assert expected in body, (
+        f"the {README_REFUNDS_SUMMARY_HEADING!r} section must show the "
+        f"complete output of {STRIPE_REFUNDS_SUMMARY_COMMAND!r}, got:\n{body}"
     )
 
 
