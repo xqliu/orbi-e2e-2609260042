@@ -26,6 +26,9 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 # subcommand; the content check below asserts every flag after that command
 # is defined by the `verify` subparser of `stripe_payments._parser()`.
 STRIPE_VERIFY_COMMAND = "python -m stripe_payments verify"
+STRIPE_EXPORT_COMMAND = "python -m stripe_payments export"
+# Issue #218: the export command takes exactly these `--format` choices.
+EXPORT_FORMATS = ("csv", "json", "both")
 STRIPE_FLAG_RE = re.compile(r"--[a-z][a-z-]*")
 
 # GitHub shows a markdown issue template by the `name`/`about` fields of
@@ -86,20 +89,34 @@ def _front_matter_keys(text: str) -> set:
     }
 
 
-def _verify_subparser_option_strings() -> set:
-    """Return every option string the `verify` subcommand parser defines."""
+def _subparser_option_strings(command: str) -> set:
+    """Return every option string a `stripe_payments` subcommand defines."""
     parser = stripe_payments._parser()
     subparsers = next(
         action
         for action in parser._actions
         if isinstance(action, argparse._SubParsersAction)
     )
-    verify = subparsers.choices["verify"]
+    subparser = subparsers.choices[command]
     return {
         option
-        for action in verify._actions
+        for action in subparser._actions
         for option in action.option_strings
     }
+
+
+def _verify_subparser_option_strings() -> set:
+    """Return every option string the `verify` subcommand parser defines."""
+    return _subparser_option_strings("verify")
+
+
+def _readme_export_command_lines() -> list:
+    """Return the README lines that run the export command."""
+    return [
+        line
+        for line in _read(README).splitlines()
+        if STRIPE_EXPORT_COMMAND in line
+    ]
 
 
 def _ci_stripe_verify_flags() -> list:
@@ -251,6 +268,30 @@ def test_ci_stripe_verify_flags_are_defined_by_the_verify_subparser():
         f"CI passes {missing} to {STRIPE_VERIFY_COMMAND!r}, but the verify "
         f"subparser only defines {sorted(option_strings)}"
     )
+
+
+def test_readme_documents_the_export_format_choices():
+    """Issue #218: the README shows how to export only CSV, only JSON or both."""
+    lines = _readme_export_command_lines()
+    assert lines, f"the README must document {STRIPE_EXPORT_COMMAND!r}"
+    # Every flag the README passes to the export command must be a real flag of
+    # the export subparser, so the documented command cannot drift.
+    flags = {flag for line in lines for flag in STRIPE_FLAG_RE.findall(line)}
+    missing_flags = flags - _subparser_option_strings("export")
+    assert not missing_flags, (
+        f"the README passes {sorted(missing_flags)} to "
+        f"{STRIPE_EXPORT_COMMAND!r}, but the export subparser does not define "
+        "them"
+    )
+    assert "--format" in flags, (
+        f"the README must show {STRIPE_EXPORT_COMMAND!r} with --format"
+    )
+    text = "\n".join(lines)
+    for format_name in EXPORT_FORMATS:
+        assert f"--format {format_name}" in text, (
+            f"the README must show {STRIPE_EXPORT_COMMAND!r} "
+            f"--format {format_name}"
+        )
 
 
 def test_live_payment_verification_cannot_run_on_push_or_pull_request():

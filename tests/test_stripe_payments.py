@@ -567,6 +567,46 @@ def test_cli_export_format_narrows_the_written_files(
     ]
 
 
+def test_cli_export_format_both_writes_both_files(live_key, stripe_lists, tmp_path):
+    output_dir = tmp_path / "both"
+    assert (
+        stripe_payments.main(
+            ["export", "--output-dir", str(output_dir), "--format", "both"]
+        )
+        == 0
+    )
+    assert sorted(path.name for path in output_dir.iterdir()) == [
+        "customers.csv",
+        "customers.json",
+        "payments.csv",
+        "payments.json",
+        "refunds.csv",
+        "refunds.json",
+    ]
+    # Explicit `both` writes the same content as the default (no flag).
+    assert json.loads(
+        (output_dir / "payments.json").read_text(encoding="utf-8")
+    ) == [
+        {
+            "id": "pi_1",
+            "amount": 100,
+            "currency": "usd",
+            "status": "succeeded",
+            "created": "2023-11-14T22:13:20Z",
+        }
+    ]
+    csv_header = next(
+        csv.reader((output_dir / "payments.csv").open(newline="", encoding="utf-8"))
+    )
+    assert csv_header == [
+        "id",
+        "amount",
+        "currency",
+        "status",
+        "created",
+    ]
+
+
 def test_cli_export_without_the_secret_creates_nothing(
     monkeypatch, stripe_api, tmp_path, capsys
 ):
@@ -647,7 +687,9 @@ def test_export_help_lists_its_options(capsys):
     out = capsys.readouterr().out
     assert "--output-dir" in out
     assert "--limit" in out
-    assert "--format" in out
+    # The documented contract: exactly these three choices, both by default.
+    assert "--format {csv,json,both}" in out
+    assert "default both" in out
 
 
 def test_module_export_fails_without_the_secret_and_creates_nothing(tmp_path):

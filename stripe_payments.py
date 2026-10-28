@@ -12,8 +12,10 @@ that talks to the Stripe API with the operator's live secret key.
   verification uses Stripe's server-side PaymentIntent API instead.  This is
   the exact command the manual, protected CI verification run executes.
 * ``python -m stripe_payments export`` lists the account's PaymentIntents,
-  Refunds and Customers and writes them into a directory as CSV and JSON
-  (both by default), so the operator can take the data elsewhere.
+  Refunds and Customers and writes them into a directory, so the operator can
+  take the data elsewhere.  ``--format csv|json|both`` picks the file types
+  (``both`` by default), so an operator who only needs CSV no longer has to
+  delete the JSON files by hand.
 
 The live secret key is read from the ``STRIPE_LIVE_SECRET_KEY`` environment
 variable (an environment secret of the protected ``stripe-live`` GitHub
