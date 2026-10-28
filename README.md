@@ -345,6 +345,25 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments refunds-summary
 `error: STRIPE_LIVE_SECRET_KEY is not set...`，补上环境变量后重跑；密钥失效时
 报 Stripe 的 `HTTP 401`，轮换环境 secret 后重跑。
 
+### 查看版本（--version）
+
+`--version` 是顶层参数，打印这个入口的版本号并以退出码 0 结束，用来确认一次运行
+对应的是哪个版本：
+
+```sh
+python -m stripe_payments --version
+```
+
+输出一行 `stripe_payments <版本号>`，例如：
+
+```
+stripe_payments 0.6.106
+```
+
+版本号与 `CHANGELOG.md` 的最新发布版本一致。不传 `--version` 时，其他子命令
+（`checkout`、`verify`、`export`、`summary`、`refunds-summary`）的行为和以前完全
+一样；版本号本身不需要 live 密钥。
+
 ## FAQ
 
 ### Q：这个仓库是什么？为什么不接受 PR？

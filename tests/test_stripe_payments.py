@@ -384,6 +384,44 @@ def test_module_runs_as_a_command_and_fails_without_the_secret(monkeypatch):
     assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
 
 
+# Issue #254: `python -m stripe_payments --version` prints the version number
+# and exits 0; without `--version` every other command behaves as before.
+def test_cli_version_prints_the_version_number_and_exits_zero(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["--version"])
+
+    assert excinfo.value.code == 0
+    assert (
+        capsys.readouterr().out.strip()
+        == f"stripe_payments {stripe_payments.VERSION}"
+    )
+
+
+def test_module_version_prints_the_version_number_and_exits_zero():
+    """The real user entry point: ``python -m stripe_payments --version``."""
+    result = subprocess.run(
+        [sys.executable, "-m", "stripe_payments", "--version"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0
+    assert re.fullmatch(r"\d+\.\d+\.\d+", stripe_payments.VERSION)
+    assert result.stdout.strip() == f"stripe_payments {stripe_payments.VERSION}"
+    assert result.stderr == ""
+
+
+def test_cli_without_version_still_requires_a_subcommand(capsys):
+    """Without `--version` the command line keeps its old behaviour."""
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main([])
+
+    assert excinfo.value.code == 2
+    assert "usage:" in capsys.readouterr().err
+
+
 def test_main_guard_exits_with_the_cli_result(monkeypatch, capsys):
     monkeypatch.delenv(stripe_payments.LIVE_SECRET_KEY_ENV, raising=False)
     monkeypatch.setattr(
