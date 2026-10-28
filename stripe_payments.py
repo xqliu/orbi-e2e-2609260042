@@ -43,7 +43,9 @@ that talks to the Stripe API with the operator's live secret key.
   currency instead (Issue #248).  ``--csv`` also
   writes those same rows to ``summary-<date>.csv`` (one column per summary
   field, so a spreadsheet shows them side by side); omitted, the command only
-  prints, as before.
+  prints, as before.  ``--quiet`` prints only the net total per currency
+  (``USD 1,233.57``), one line per currency, so a script reads the net income
+  without parsing the payments and refunds columns (Issue #260).
 * ``python -m stripe_payments refunds-summary`` prints the refund count and
   amount per ISO week and currency, one line per week and currency, so the
   refunds of a week can be read without filtering the exported CSV files.
@@ -497,6 +499,21 @@ def _summary_line(
     )
 
 
+def _summary_net_line(
+    currency: str, payments: int, refunds: int, *, month: str | None = None
+) -> str:
+    """One net-only summary line, e.g. ``USD 1,233.57`` (Issue #260).
+
+    ``--quiet`` prints only the net total per currency, so a script (or a quick
+    daily look) does not have to parse the payments and refunds columns.  A
+    ``month`` prefixes the line like the full by-month line does, e.g.
+    ``2026-10 USD 1,233.57``.
+    """
+    row = _summary_row(currency, payments, refunds, month=month)
+    prefix = f"{month} " if month is not None else ""
+    return f"{prefix}{row['currency']} {row['net']}"
+
+
 def _summary_total_line(payments: int, refunds: int) -> str:
     """The all-currency total line, e.g. ``合计 付款 1,244.57 退款 1.00 ...``.
 
@@ -669,6 +686,15 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     summary.add_argument(
+        "--quiet",
+        action="store_true",
+        help=(
+            "print only the net total per currency, one net-only line per "
+            "currency (no payments/refunds columns and no total line); "
+            "omitted, the full summary is printed"
+        ),
+    )
+    summary.add_argument(
         "--by-month",
         action="store_true",
         help=(
@@ -791,20 +817,29 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if currency is not None and code != currency:
                     continue
                 payments, refunds = totals[key]
-                print(_summary_line(code, payments, refunds, month=month))
+                if args.quiet:
+                    # Issue #260: only the net total per currency.
+                    print(
+                        _summary_net_line(
+                            code, payments, refunds, month=month
+                        )
+                    )
+                else:
+                    print(_summary_line(code, payments, refunds, month=month))
                 rows.append(
                     _summary_row(code, payments, refunds, month=month)
                 )
                 total_payments += _summary_hundredths(payments, code)
                 total_refunds += _summary_hundredths(refunds, code)
-            if rows:
+            if rows and not args.quiet:
                 # Issue #243: the extra last row adds up the printed values.
                 print(_summary_total_line(total_payments, total_refunds))
             if args.csv:
                 path = write_summary_csv(
                     rows, output_dir=args.output_dir, by_month=args.by_month
                 )
-                print(f"exported summary rows={len(rows)} to {path}")
+                if not args.quiet:
+                    print(f"exported summary rows={len(rows)} to {path}")
             return 0
         if args.command == "refunds-summary":
             refund_totals = summarize_refunds_by_week()

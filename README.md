@@ -308,6 +308,26 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary --by-month 
 
 不传 `--by-month` 时输出与以前完全一致（每个币种一行 + 合计行）。
 
+只想看每个币种的净收入、不要付款和退款两列时加 `--quiet`：
+
+```sh
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary --quiet
+```
+
+每个币种只打印一行「币种 + 净额」，不再打印 `付款`、`退款` 两列，也不打印
+`合计` 行（所以脚本直接取第二列就是净收入）：
+
+```
+EUR 10.00
+USD 1,233.57
+```
+
+币种大写、金额带千分位，与不加 `--quiet` 时那一行的 `净额` 完全相同。
+`--currency usd` 和 `--by-month` 照样可以和 `--quiet` 一起用：前者仍只打印该币种，
+后者每行前面仍带月份（例如 `2026-10 USD 1,233.57`），合计行同样不打印。
+`--csv` 与 `--quiet` 一起用时文件照旧写成与不加 `--quiet` 时相同的内容，只是终端
+不再打印那行文件提示。不传 `--quiet` 时输出与以前完全一致。
+
 失败与修复：`--currency` 传空字符串时命令以退出码 2 结束并报
 `error: --currency must not be empty, got ''`，此时不会调用 Stripe；改成真实币种
 代码（如 `usd`）后重跑。缺少 `STRIPE_LIVE_SECRET_KEY` 时命令以退出码 2 结束并报
