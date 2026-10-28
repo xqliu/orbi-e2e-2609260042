@@ -9,6 +9,7 @@ guessed.  No network and no keys are required.
 import csv
 import json
 import os
+import re
 import runpy
 import subprocess
 import sys
@@ -1483,46 +1484,101 @@ def _refund_on(identifier, amount, currency, created):
 
 
 @pytest.fixture
-def stripe_refund_months(stripe_api):
-    """Refunds across two months and two currencies, as the command reads them."""
+def stripe_refund_weeks(stripe_api):
+    """Refunds across two ISO weeks and two currencies, as the command reads them."""
     stripe_api.list_payloads = {
         "/v1/refunds": _list_payload(
-            _refund_on("re_1", 100, "usd", _utc(2026, 10, 3)),
-            _refund_on("re_2", 250, "usd", _utc(2026, 10, 28)),
+            # 2026-10-28 and 2026-10-30 are in the same ISO week (2026-W44).
+            _refund_on("re_1", 100, "usd", _utc(2026, 10, 28)),
+            _refund_on("re_2", 250, "usd", _utc(2026, 10, 30)),
             _refund_on("re_3", 500, "eur", _utc(2026, 10, 28)),
-            _refund_on("re_4", 900, "usd", _utc(2026, 9, 30)),
+            # 2026-09-28 is the Monday of ISO week 40.
+            _refund_on("re_4", 900, "usd", _utc(2026, 9, 28)),
         )
     }
     return stripe_api
 
 
-def test_cli_refunds_summary_prints_one_line_per_month_and_currency(
-    live_key, stripe_refund_months, capsys
+def test_cli_refunds_summary_prints_one_line_per_week_and_currency(
+    live_key, stripe_refund_weeks, capsys
 ):
     exit_code = stripe_payments.main(["refunds-summary"])
 
     assert exit_code == 0
     assert capsys.readouterr().out.splitlines() == [
-        # Sorted by month, then currency.  The Issue #224 acceptance line:
-        # October's two usd refunds (1.00 + 2.50) add up to 3.50.
-        "2026-09 usd 退款 1 笔 9.00",
-        "2026-10 eur 退款 1 笔 5.00",
-        "2026-10 usd 退款 2 笔 3.50",
+        # Sorted by ISO week, then currency.  One row per week: the two usd
+        # refunds of 2026-W44 (1.00 + 2.50) add up to 3.50.
+        "2026-W40 usd 退款 1 笔 9.00",
+        "2026-W44 eur 退款 1 笔 5.00",
+        "2026-W44 usd 退款 2 笔 3.50",
     ]
 
 
+REFUND_WEEK_LINE_RE = re.compile(
+    r"^(?P<week>\d{4}-W\d{2}) (?P<currency>[a-z]{3}) 退款 "
+    r"(?P<count>\d+) 笔 (?P<amount>[\d,]+\.\d{2})$"
+)
+
+
+def _parse_refund_week_line(line):
+    """Return ``(week, currency, count, amount)`` from one printed line."""
+    match = REFUND_WEEK_LINE_RE.match(line)
+    assert match, f"unexpected refunds-summary line: {line!r}"
+    return (
+        match["week"],
+        match["currency"],
+        int(match["count"]),
+        float(match["amount"].replace(",", "")),
+    )
+
+
+def test_refunds_summary_week_rows_add_up_to_every_refund(
+    live_key, stripe_api, capsys
+):
+    """The Issue #249 acceptance: the week rows cover every refund record."""
+    stripe_api.list_payloads = {
+        "/v1/refunds": _list_payload(
+            _refund_on("re_1", 100, "usd", _utc(2026, 10, 3)),
+            _refund_on("re_2", 250, "usd", _utc(2026, 10, 28)),
+            _refund_on("re_3", 500, "eur", _utc(2026, 10, 29)),
+            _refund_on("re_4", 900, "usd", _utc(2026, 11, 2)),
+            _refund_on("re_5", 125, "usd", _utc(2026, 11, 2)),
+        )
+    }
+
+    assert stripe_payments.main(["refunds-summary"]) == 0
+    parsed = [
+        _parse_refund_week_line(line)
+        for line in capsys.readouterr().out.splitlines()
+    ]
+
+    # Four week/currency rows: 2026-W40 usd, 2026-W44 eur, 2026-W44 usd and
+    # 2026-W45 usd.  Every row is exactly one week, and no refund is dropped.
+    assert [week for week, _, _, _ in parsed] == [
+        "2026-W40",
+        "2026-W44",
+        "2026-W44",
+        "2026-W45",
+    ]
+    assert sum(count for _, _, count, _ in parsed) == 5
+    totals = {}
+    for _, currency, _, amount in parsed:
+        totals[currency] = round(totals.get(currency, 0.0) + amount, 2)
+    assert totals == {"usd": 13.75, "eur": 5.00}
+
+
 def test_refunds_summary_reads_the_refunds_list_only(
-    live_key, stripe_refund_months
+    live_key, stripe_refund_weeks
 ):
     stripe_payments.main(["refunds-summary"])
 
     assert [
         (request["path"], request["form"].get("limit"))
-        for request in stripe_refund_months.requests
+        for request in stripe_refund_weeks.requests
     ] == [("/v1/refunds", ["10"])]
     assert all(
         request["authorization"] == "Bearer sk_live_test_key"
-        for request in stripe_refund_months.requests
+        for request in stripe_refund_weeks.requests
     )
 
 
@@ -1541,27 +1597,48 @@ def test_refunds_summary_totals_every_page(live_key, stripe_api, capsys):
 
     assert stripe_payments.main(["refunds-summary"]) == 0
     assert capsys.readouterr().out.splitlines() == [
-        "2026-10 usd 退款 2 笔 3.50",
+        "2026-W40 usd 退款 2 笔 3.50",
     ]
 
 
-def test_refunds_summary_uses_the_utc_month_and_documented_amounts(
+def test_refunds_summary_uses_the_utc_iso_week_and_documented_amounts(
     live_key, stripe_api, capsys
 ):
     stripe_api.list_payloads = {
         "/v1/refunds": _list_payload(
-            # 2026-10-31T23:30:00Z is still October in UTC.
-            _refund_on("re_1", 500, "jpy", _utc(2026, 10, 31, 23, 30)),
-            # The next UTC month, so it gets its own line.
-            _refund_on("re_2", 100, "usd", _utc(2026, 11, 1, 0, 30)),
+            # 2026-11-01T23:30:00Z is Sunday, still ISO week 44 in UTC.
+            _refund_on("re_1", 500, "jpy", _utc(2026, 11, 1, 23, 30)),
+            # The next UTC day is Monday, the first day of ISO week 45.
+            _refund_on("re_2", 100, "usd", _utc(2026, 11, 2, 0, 30)),
         )
     }
 
     assert stripe_payments.main(["refunds-summary"]) == 0
     assert capsys.readouterr().out.splitlines() == [
         # 500 JPY is 500 (zero-decimal), not 5.00.
-        "2026-10 jpy 退款 1 笔 500",
-        "2026-11 usd 退款 1 笔 1.00",
+        "2026-W44 jpy 退款 1 笔 500",
+        "2026-W45 usd 退款 1 笔 1.00",
+    ]
+
+
+def test_refunds_summary_uses_the_iso_week_year_across_a_year_boundary(
+    live_key, stripe_api, capsys
+):
+    stripe_api.list_payloads = {
+        "/v1/refunds": _list_payload(
+            # 2027-01-01 is a Friday of ISO week 53 of ISO year 2026, so the
+            # labels come from the ISO week year, not the calendar year.
+            _refund_on("re_1", 100, "usd", _utc(2027, 1, 1)),
+            _refund_on("re_2", 250, "usd", _utc(2026, 12, 31)),
+            # 2027-01-04 is the Monday that starts ISO week 1 of 2027.
+            _refund_on("re_3", 500, "usd", _utc(2027, 1, 4)),
+        )
+    }
+
+    assert stripe_payments.main(["refunds-summary"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "2026-W53 usd 退款 2 笔 3.50",
+        "2027-W01 usd 退款 1 笔 5.00",
     ]
 
 

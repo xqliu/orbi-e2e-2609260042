@@ -269,29 +269,31 @@ USD,"1,234.57",1.00,"1,233.57"
 报 Stripe 的 `HTTP 401`，轮换环境 secret 后重跑。加上 `--csv` 时，这些失败都发生在
 写文件之前，不会留下空的或不完整的 CSV；补好配置重跑即可。
 
-### 按月汇总退款（refunds-summary）
+### 按周汇总退款（refunds-summary）
 
-`refunds-summary` 子命令在终端按「退款创建月份（UTC）+ 币种」逐行打印退款笔数和
-退款金额，不用再打开 CSV 自己筛：
+`refunds-summary` 子命令在终端按「退款创建周（UTC，ISO 8601 周）+ 币种」逐行打印
+退款笔数和退款金额，不用再打开 CSV 自己筛：
 
 ```sh
 STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments refunds-summary
 ```
 
-命令不带参数，统计账户里的全部退款。每月每个币种一行（先按月份、再按币种代码
-排序），例如 9 月有一笔 usd 退款 0.50、10 月有一笔 eur 退款 1.00 和两笔 usd
+命令不带参数，统计账户里的全部退款。每周每个币种一行（先按周、再按币种代码排序），
+例如 ISO 第 40 周有一笔 usd 退款 0.50、第 44 周有一笔 eur 退款 1.00 和两笔 usd
 退款 1.00、2.50 时，完整输出就是这三行：
 
 ```
-2026-09 usd 退款 1 笔 0.50
-2026-10 eur 退款 1 笔 1.00
-2026-10 usd 退款 2 笔 3.50
+2026-W40 usd 退款 1 笔 0.50
+2026-W44 eur 退款 1 笔 1.00
+2026-W44 usd 退款 2 笔 3.50
 ```
 
-月份取退款记录 `created` 时间戳的 UTC 年月，币种保持 Stripe 返回的小写代码；金额
-按与 `summary` 相同的最小货币单位规则换算（两位小数币种除以 100，JPY、KRW 等
-零小数币种按文档原样打印，见 <https://docs.stripe.com/currencies>）。账户没有退款
-记录时不打印任何行。
+周取退款记录 `created` 时间戳的 UTC 所在 ISO 8601 周（周一至周日，用 Python 标准库
+`datetime.isocalendar()` 计算），标签形如 `2026-W44`；跨年时用 ISO 周年份，所以每笔
+退款只会落在一行里，所有行的笔数和金额加起来就是账户的全部退款。币种保持 Stripe
+返回的小写代码；金额按与 `summary` 相同的最小货币单位规则换算（两位小数币种除以
+100，JPY、KRW 等零小数币种按文档原样打印，见
+<https://docs.stripe.com/currencies>）。账户没有退款记录时不打印任何行。
 
 失败与修复：缺少 `STRIPE_LIVE_SECRET_KEY` 时命令以退出码 2 结束并报
 `error: STRIPE_LIVE_SECRET_KEY is not set...`，补上环境变量后重跑；密钥失效时
