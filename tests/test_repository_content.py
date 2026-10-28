@@ -30,6 +30,9 @@ STRIPE_EXPORT_COMMAND = "python -m stripe_payments export"
 # Issue #221: the README documents the summary command and its line format.
 STRIPE_SUMMARY_COMMAND = "python -m stripe_payments summary"
 SUMMARY_SAMPLE_LINE = "USD 付款 1,234.57 退款 1.00 净额 1,233.57"
+# Issue #224: the README documents the refunds-summary command and its line format.
+STRIPE_REFUNDS_SUMMARY_COMMAND = "python -m stripe_payments refunds-summary"
+REFUNDS_SUMMARY_SAMPLE_LINE = "2026-10 usd 退款 2 笔 3.50"
 # Issue #218: the export command takes exactly these `--format` choices.
 EXPORT_FORMATS = ("csv", "json", "both")
 STRIPE_FLAG_RE = re.compile(r"--[a-z][a-z-]*")
@@ -307,6 +310,20 @@ def test_readme_documents_the_summary_command_output():
     # from what `summary` prints.
     assert SUMMARY_SAMPLE_LINE in text, (
         f"the README must show the summary line {SUMMARY_SAMPLE_LINE!r}"
+    )
+
+
+def test_readme_documents_the_refunds_summary_command_output():
+    """Issue #224: one month/currency per line, count and amount."""
+    text = _read(README)
+    assert STRIPE_REFUNDS_SUMMARY_COMMAND in text, (
+        f"the README must document {STRIPE_REFUNDS_SUMMARY_COMMAND!r}"
+    )
+    # The documented sample is the real line format, so the docs cannot drift
+    # from what `refunds-summary` prints.
+    assert REFUNDS_SUMMARY_SAMPLE_LINE in text, (
+        f"the README must show the refunds-summary line "
+        f"{REFUNDS_SUMMARY_SAMPLE_LINE!r}"
     )
 
 
