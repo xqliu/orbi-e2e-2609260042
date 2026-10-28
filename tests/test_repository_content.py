@@ -30,6 +30,8 @@ STRIPE_EXPORT_COMMAND = "python -m stripe_payments export"
 # Issue #221: the README documents the summary command and its line format.
 STRIPE_SUMMARY_COMMAND = "python -m stripe_payments summary"
 SUMMARY_SAMPLE_LINE = "USD 付款 1,234.57 退款 1.00 净额 1,233.57"
+# Issue #243: the summary ends with one all-currency total line.
+SUMMARY_TOTAL_SAMPLE_LINE = "合计 付款 1,244.57 退款 1.00 净额 1,243.57"
 # Issue #224: the README documents the refunds-summary command and its line format.
 STRIPE_REFUNDS_SUMMARY_COMMAND = "python -m stripe_payments refunds-summary"
 REFUNDS_SUMMARY_SAMPLE_LINE = "2026-10 usd 退款 2 笔 3.50"
@@ -336,6 +338,21 @@ def test_readme_documents_the_summary_command_output():
     # from what `summary` prints.
     assert SUMMARY_SAMPLE_LINE in text, (
         f"the README must show the summary line {SUMMARY_SAMPLE_LINE!r}"
+    )
+
+
+# Issue #243: the summary section shows the total line and says it adds up the
+# printed currency values.
+def test_readme_documents_the_summary_total_line():
+    body = _readme_subsection(README_SUMMARY_HEADING)
+    assert SUMMARY_TOTAL_SAMPLE_LINE in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show the summary total "
+        f"line {SUMMARY_TOTAL_SAMPLE_LINE!r}"
+    )
+    label = stripe_payments.SUMMARY_TOTAL_LABEL
+    assert label in body, (
+        f"the {README_SUMMARY_HEADING!r} section must name the total line "
+        f"label {label!r}"
     )
 
 
