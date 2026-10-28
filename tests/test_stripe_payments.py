@@ -3077,3 +3077,250 @@ def test_module_export_accepts_the_email_option(tmp_path):
     assert result.returncode == 2
     assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
     assert not output_dir.exists()
+
+
+# --- export --email at the real entry point (Issue #266) -----------------
+#
+# The tests above drive ``main()`` in this process.  Issue #266 accepts the
+# documented user command itself, ``python -m stripe_payments export
+# --email ...``, so the tests below run that command as its own process and
+# let the real official SDK talk to the local recorder.  ``sitecustomize`` on
+# the subprocess ``PYTHONPATH`` points the SDK at the recorder before
+# ``stripe_payments`` starts; the command and its flags stay exactly the ones
+# the README documents.
+
+
+@pytest.fixture
+def local_stripe_server():
+    """A local Stripe HTTP recorder a ``python -m`` subprocess can reach."""
+    recorder = _Recorder()
+    server = _StripeServer(recorder)
+    yield recorder, server
+    server.stop()
+
+
+def _dated_export_file(output_dir, name, extension):
+    """The exported file whose name carries the process's UTC export date."""
+    matches = sorted(output_dir.glob(f"{name}-*.{extension}"))
+    assert len(matches) == 1, [path.name for path in matches]
+    return matches[0]
+
+
+def _run_module_export(server, arguments, tmp_path):
+    """Run ``python -m stripe_payments <arguments>`` against the recorder."""
+    shim = tmp_path / "sdk_shim"
+    shim.mkdir(exist_ok=True)
+    (shim / "sitecustomize.py").write_text(
+        "import os\n"
+        "\n"
+        "import stripe\n"
+        "\n"
+        "stripe.api_base = os.environ['STRIPE_API_BASE']\n",
+        encoding="utf-8",
+    )
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != stripe_payments.LIVE_SECRET_KEY_ENV
+    }
+    env[stripe_payments.LIVE_SECRET_KEY_ENV] = "sk_live_test_key"
+    env["STRIPE_API_BASE"] = server.base_url
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(shim)] + ([env["PYTHONPATH"]] if env.get("PYTHONPATH") else [])
+    )
+    return subprocess.run(
+        [sys.executable, "-m", "stripe_payments", *arguments],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+
+
+def test_module_export_email_writes_only_that_customers_records(
+    local_stripe_server, tmp_path
+):
+    """Issue #266 Acceptance: the real command writes only that customer's data."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/customers": _list_payload(_customer(1)),
+        "/v1/payment_intents": _list_payload(
+            {
+                "id": "pi_1",
+                "object": "payment_intent",
+                "customer": "cus_1",
+                "amount": 2500,
+                "currency": "usd",
+                "status": "succeeded",
+                "created": 1700000000,
+            }
+        ),
+        "/v1/refunds": _list_payload(
+            {
+                "id": "re_1",
+                "object": "refund",
+                "payment_intent": "pi_1",
+                "amount": 500,
+                "currency": "usd",
+                "status": "succeeded",
+                "created": 1700000100,
+            },
+            {
+                # Another customer's refund: Stripe's Refunds list has no
+                # customer filter, so the command must drop it itself.
+                "id": "re_9",
+                "object": "refund",
+                "payment_intent": "pi_9",
+                "amount": 900,
+                "currency": "usd",
+                "status": "succeeded",
+                "created": 1700000200,
+            },
+        ),
+    }
+    output_dir = tmp_path / "export"
+
+    result = _run_module_export(
+        server,
+        [
+            "export",
+            "--output-dir",
+            str(output_dir),
+            "--email",
+            "buyer1@example.com",
+        ],
+        tmp_path,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"exported payments=1 refunds=1 customers=1 to {output_dir}/" in (
+        result.stdout
+    )
+
+    # Stripe's documented filters: customers by `email`, payments by
+    # `customer`; the Refunds list supports neither.
+    assert [request["path"] for request in recorder.requests] == [
+        "/v1/customers",
+        "/v1/payment_intents",
+        "/v1/refunds",
+    ]
+    assert recorder.requests[0]["form"]["email"] == ["buyer1@example.com"]
+    assert recorder.requests[1]["form"]["customer"] == ["cus_1"]
+    assert "email" not in recorder.requests[1]["form"]
+    assert "customer" not in recorder.requests[2]["form"]
+
+    assert sorted(
+        path.name.split("-")[0] for path in output_dir.iterdir()
+    ) == ["customers", "customers", "payments", "payments", "refunds", "refunds"]
+
+    payments = list(
+        csv.reader(
+            _dated_export_file(output_dir, "payments", "csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
+    )
+    assert payments == [
+        ["编号", "金额", "币种", "状态", "创建时间", "客户邮箱"],
+        [
+            "pi_1",
+            "2500",
+            "usd",
+            "succeeded",
+            "2023-11-14T22:13:20Z",
+            "buyer1@example.com",
+        ],
+    ]
+
+    refunds = list(
+        csv.reader(
+            _dated_export_file(output_dir, "refunds", "csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
+    )
+    assert refunds == [
+        ["编号", "付款编号", "金额", "币种", "状态", "创建时间"],
+        ["re_1", "pi_1", "500", "usd", "succeeded", "2023-11-14T22:15:00Z"],
+    ]
+
+    customers = list(
+        csv.reader(
+            _dated_export_file(output_dir, "customers", "csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
+    )
+    assert customers == [
+        ["编号", "邮箱", "创建时间"],
+        [
+            "cus_1",
+            "buyer1@example.com",
+            stripe_payments._created(_customer(1)["created"]),
+        ],
+    ]
+
+    # The JSON files carry the same single-customer records.
+    assert json.loads(
+        _dated_export_file(output_dir, "payments", "json").read_text(
+            encoding="utf-8"
+        )
+    ) == [
+        {
+            "id": "pi_1",
+            "amount": 2500,
+            "currency": "usd",
+            "status": "succeeded",
+            "created": "2023-11-14T22:13:20Z",
+            "customer_email": "buyer1@example.com",
+        }
+    ]
+    assert [
+        row["id"]
+        for row in json.loads(
+            _dated_export_file(output_dir, "refunds", "json").read_text(
+                encoding="utf-8"
+            )
+        )
+    ] == ["re_1"]
+    assert [
+        row["email"]
+        for row in json.loads(
+            _dated_export_file(output_dir, "customers", "json").read_text(
+                encoding="utf-8"
+            )
+        )
+    ] == ["buyer1@example.com"]
+
+
+def test_module_export_email_unknown_address_fails_without_writing_files(
+    local_stripe_server, tmp_path
+):
+    """Issue #266 failure path: report the address and write nothing."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {"/v1/customers": _list_payload()}
+    output_dir = tmp_path / "export"
+
+    result = _run_module_export(
+        server,
+        [
+            "export",
+            "--output-dir",
+            str(output_dir),
+            "--email",
+            "nobody@example.com",
+        ],
+        tmp_path,
+    )
+
+    assert result.returncode == 2
+    assert (
+        "error: no Stripe customer has the email 'nobody@example.com'; "
+        "the Customers list's email filter is an exact match"
+    ) in result.stderr
+    assert [request["path"] for request in recorder.requests] == [
+        "/v1/customers"
+    ]
+    assert recorder.requests[0]["form"]["email"] == ["nobody@example.com"]
+    assert not output_dir.exists()
