@@ -148,7 +148,8 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --customer c
 
 只导出某个客户时传 `--customer cus_...`（第四行）：Stripe 的 PaymentIntents
 列表按这个 `customer` 过滤，所以 `payments.csv` 每一行都是该客户，并多出一列
-`customer` 记录这个 id；退款列表本身没有 customer 过滤，命令只保留那些
+`customer`，值取自每笔付款记录本身（因为列表已被过滤，它就是传入的这个 id）；
+退款列表本身没有 customer 过滤，命令只保留那些
 `payment_intent` 属于该客户付款的退款。不传 `--customer` 时导出的文件与以前完全
 一样（没有 `customer` 列、包含账户全部记录）。`customers.csv` 仍是账户的客户
 列表，不随 `--customer` 收窄。

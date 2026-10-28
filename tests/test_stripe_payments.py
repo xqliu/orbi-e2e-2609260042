@@ -1068,7 +1068,9 @@ def test_cli_export_customer_exports_only_that_customers_payments_and_refunds(
         ["id", "customer", "amount", "currency", "status", "created"],
         ["pi_1", "cus_1", "2500", "usd", "succeeded", "2023-11-14T22:13:20Z"],
     ]
-    # Acceptance: every payments.csv row carries the requested customer id.
+    # Acceptance: every payments.csv row carries the requested customer id, and
+    # the value is the payment record's own customer (see the provenance test
+    # below), so the assertion holds for the data and not for the argument.
     assert {row[1] for row in _csv_rows(output_dir, "payments")[1:]} == {"cus_1"}
 
     assert _csv_rows(output_dir, "refunds") == [
@@ -1110,6 +1112,50 @@ def test_export_without_customer_sends_no_customer_parameter_and_keeps_the_colum
     assert "customer" not in json.loads(
         (output_dir / "payments.json").read_text(encoding="utf-8")
     )[0]
+
+
+def test_export_customer_column_comes_from_the_payment_record(
+    live_key, stripe_customer_lists, tmp_path
+):
+    """The column reports the row's own customer, never the CLI argument.
+
+    If a record ever came back belonging to another customer (a filter
+    regression on Stripe's side, or a page fetched without the filter), the
+    export must show that customer instead of stamping the requested id on
+    every row.
+    """
+    stripe_customer_lists.list_payloads["/v1/payment_intents"] = _list_payload(
+        {
+            "id": "pi_1",
+            "object": "payment_intent",
+            "customer": "cus_1",
+            "amount": 2500,
+            "currency": "usd",
+            "status": "succeeded",
+            "created": 1700000000,
+        },
+        {
+            "id": "pi_2",
+            "object": "payment_intent",
+            "customer": "cus_9",
+            "amount": 700,
+            "currency": "usd",
+            "status": "succeeded",
+            "created": 1700000300,
+        },
+    )
+    output_dir = tmp_path / "export"
+    assert (
+        stripe_payments.main(
+            ["export", "--output-dir", str(output_dir), "--customer", "cus_1"]
+        )
+        == 0
+    )
+
+    assert {(row[0], row[1]) for row in _csv_rows(output_dir, "payments")[1:]} == {
+        ("pi_1", "cus_1"),
+        ("pi_2", "cus_9"),
+    }
 
 
 def test_export_customer_without_payments_writes_no_payment_and_no_refund(

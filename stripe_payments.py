@@ -204,7 +204,8 @@ def export_data(
     ]
     rows = {
         "payments": [
-            _payment_row(payment, customer=customer) for payment in payments
+            _payment_row(payment, with_customer=customer is not None)
+            for payment in payments
         ],
         "refunds": [_refund_row(refund) for refund in refunds],
         "customers": [
@@ -275,22 +276,23 @@ def _created(value: object) -> str:
 
 
 def _payment_columns() -> tuple[str, ...]:
-    """The payments columns of a ``--customer`` export: the filter is a column."""
+    """The payments columns of a ``--customer`` export: the customer is a column."""
     columns = EXPORT_COLUMNS["payments"]
     return (columns[0], "customer") + columns[1:]
 
 
 def _payment_row(
-    payment: "stripe.PaymentIntent", *, customer: str | None = None
+    payment: "stripe.PaymentIntent", *, with_customer: bool = False
 ) -> dict:
-    """One payments row; a ``--customer`` export carries that customer id.
+    """One payments row; a ``--customer`` export also carries the customer id.
 
-    The list itself is filtered by this customer on Stripe's side, so every
-    exported payment belongs to it.
+    The id comes from the payment record itself (Stripe filtered the list by
+    the requested customer), so the column reports the customer the row
+    actually belongs to instead of echoing the command-line argument.
     """
     row = {"id": payment.id}
-    if customer is not None:
-        row["customer"] = customer
+    if with_customer:
+        row["customer"] = getattr(payment, "customer", None) or ""
     row.update(
         amount=payment.amount,
         currency=payment.currency,
