@@ -47,7 +47,8 @@ that talks to the Stripe API with the operator's live secret key.
   (``USD 1,233.57``), one line per currency, so a script reads the net income
   without parsing the payments and refunds columns (Issue #260).  ``--top N``
   prints only the N currencies with the largest net total, largest first
-  (Issue #262).
+  (Issue #262).  ``--days N`` reads only the payments and refunds created in
+  the last N days, so a daily check can ignore older records (Issue #271).
 * ``python -m stripe_payments refunds-summary`` prints the refund count and
   amount per ISO week and currency, one line per week and currency, so the
   refunds of a week can be read without filtering the exported CSV files.
@@ -147,6 +148,11 @@ SUMMARY_COLUMNS_BY_MONTH = ("month",) + SUMMARY_COLUMNS
 # Issue #243: the summary ends with one line adding up the printed currencies,
 # so a daily check reads the grand total instead of adding the lines by hand.
 SUMMARY_TOTAL_LABEL = "合计"
+
+# Issue #271: `summary --days N` reads only the last N days.  The window is a
+# rolling N*24-hour period ending now, and Stripe's documented `created[gte]`
+# list filter (inclusive) pushes it down to both lists.
+SECONDS_PER_DAY = 24 * 60 * 60
 
 # Stripe keeps amounts in the smallest currency unit, but these currencies have
 # no minor unit: 500 is 500 JPY, not 5.00 JPY (docs.stripe.com/currencies,
@@ -365,8 +371,25 @@ def _month(created: object) -> str:
     )
 
 
+def _now_timestamp() -> int:
+    """The current Unix time, kept as a function so a test can pin it."""
+    return int(datetime.now(timezone.utc).timestamp())
+
+
+def _created_filter(days: int | None) -> dict:
+    """The documented ``created[gte]`` filter for the last ``days`` days.
+
+    Stripe includes a record whose ``created`` equals the cutoff, so "the last
+    N days" is the rolling N*24-hour window ending now.  ``None`` means "no
+    filter": the previous whole-account request is sent unchanged.
+    """
+    if days is None:
+        return {}
+    return {"created": {"gte": _now_timestamp() - days * SECONDS_PER_DAY}}
+
+
 def summarize_data(
-    *, by_month: bool = False
+    *, by_month: bool = False, days: int | None = None
 ) -> dict[str, tuple[int, int]] | dict[tuple[str, str], tuple[int, int]]:
     """Return ``{currency: (payments_total, refunds_total)}`` for the account.
 
@@ -374,17 +397,26 @@ def summarize_data(
     the month being the record's own ``created`` timestamp in UTC, so every
     month is totalled on its own.
 
+    With ``days`` both lists take the documented ``created[gte]`` filter
+    (Issue #271), so only the records created in the last ``days`` days are
+    totalled; omitted, the whole account is totalled as before.
+
     Every page of the PaymentIntents and Refunds lists is read, so the totals
-    cover the whole account, not only the first page.
+    cover every matching record, not only the first page.
     """
     stripe.api_key = live_secret_key()
+    filters = _created_filter(days)
     totals: dict[object, list[int]] = {}
-    for payment in _list_all(stripe.PaymentIntent, limit=DEFAULT_LIMIT):
+    for payment in _list_all(
+        stripe.PaymentIntent, limit=DEFAULT_LIMIT, params=filters
+    ):
         key = _summary_key(
             payment.currency, payment.created, by_month=by_month
         )
         totals.setdefault(key, [0, 0])[0] += payment.amount
-    for refund in _list_all(stripe.Refund, limit=DEFAULT_LIMIT):
+    for refund in _list_all(
+        stripe.Refund, limit=DEFAULT_LIMIT, params=filters
+    ):
         key = _summary_key(
             refund.currency, refund.created, by_month=by_month
         )
@@ -727,6 +759,16 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     summary.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "only total the payments and refunds created in the last N days "
+            "(e.g. --days 30); omitted, the whole account is totalled"
+        ),
+    )
+    summary.add_argument(
         "--csv",
         action="store_true",
         help=(
@@ -836,7 +878,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ConfigurationError(
                     f"--top must be positive, got {args.top}"
                 )
-            totals = summarize_data(by_month=args.by_month)
+            if args.days is not None and args.days < 1:
+                raise ConfigurationError(
+                    f"--days must be positive, got {args.days}"
+                )
+            totals = summarize_data(by_month=args.by_month, days=args.days)
             entries = []
             for key in sorted(totals):
                 month, code = key if args.by_month else (None, key)

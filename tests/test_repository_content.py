@@ -545,6 +545,35 @@ def test_readme_documents_the_summary_top_option():
     )
 
 
+# Issue #271: `summary --days 30` reads only the last 30 days.
+# The sample data is the README's `--days` block, rendered through the real
+# line helpers below, so the docs cannot drift from the output.
+DAYS_SAMPLE_DATA = (("eur", 1000, 0), ("usd", 123457, 100))
+
+
+def test_readme_documents_the_summary_days_option():
+    """Issue #271: the summary section shows the --days usage and its output."""
+    body = _readme_subsection(README_SUMMARY_HEADING)
+    assert "--days" in _subparser_option_strings("summary"), (
+        "the summary subparser must define --days"
+    )
+    assert f"{STRIPE_SUMMARY_COMMAND} --days 30" in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show "
+        f"{STRIPE_SUMMARY_COMMAND!r} --days 30"
+    )
+    expected = "\n".join(
+        stripe_payments._summary_line(currency, payments, refunds)
+        for currency, payments, refunds in DAYS_SAMPLE_DATA
+    ) + "\n" + stripe_payments._summary_total_line(
+        sum(payments for _, payments, _ in DAYS_SAMPLE_DATA),
+        sum(refunds for _, _, refunds in DAYS_SAMPLE_DATA),
+    )
+    assert expected in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show the complete "
+        f"`summary --days 30` output, got:\n{body}"
+    )
+
+
 def test_readme_documents_the_refunds_summary_command_output():
     """Issue #224/#249: one ISO week/currency per line, count and amount."""
     text = _read(README)

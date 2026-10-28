@@ -49,6 +49,10 @@
 - `summary` 子命令新增 `--top N`：只打印净额最大的 N 个币种（按净额从大到小
   排序，例如 `summary --top 2`），`合计` 行只加总打印出来的行；不传时输出与
   以前完全一致。
+- `summary` 子命令新增 `--days N`：只统计最近 N×24 小时内（按记录 `created`，
+  含边界，如 `summary --days 30`）的付款和退款，通过 Stripe 列表的
+  `created[gte]` 过滤参数只读取这个时间段；与 `--by-month`、`--currency`、
+  `--quiet`、`--top`、`--csv` 组合时也只看到窗口内记录；不传时输出与以前完全一致。
 
 ### 变更
 

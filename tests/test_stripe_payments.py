@@ -95,6 +95,19 @@ class _StripeServer:
                     payload = recorder_self.list_payloads.get(
                         parsed.path, {"object": "list", "data": []}
                     )
+                # Issue #271: Stripe's documented `created[gte]` list filter
+                # returns only records created at or after the cutoff, so the
+                # fake API applies it like the real one does.
+                created_gte = params.get("created[gte]", [None])[0]
+                if created_gte is not None and payload.get("data"):
+                    payload = {
+                        **payload,
+                        "data": [
+                            item
+                            for item in payload["data"]
+                            if int(item.get("created", 0)) >= int(created_gte)
+                        ],
+                    }
                 # Stripe's list responses carry the collection ``url``; the SDK
                 # needs it to follow pagination to the next page.
                 if payload.get("object") == "list" and "url" not in payload:
@@ -2145,6 +2158,190 @@ def test_module_summary_top_fails_without_the_secret():
 def _utc(*parts):
     """Stripe's UTC epoch seconds for a wall-clock UTC date/time."""
     return int(datetime(*parts, tzinfo=timezone.utc).timestamp())
+
+
+# --- summary --days (Issue #271) ---------------------------------------
+
+# The pinned "now" of the --days tests and the 30-day cutoff it produces, so
+# the Stripe request and the fixture records stay deterministic.
+DAYS_NOW = _utc(2026, 10, 28, 12)
+DAYS_30_CUTOFF = DAYS_NOW - 30 * 24 * 60 * 60
+
+
+@pytest.fixture
+def summary_days_clock(monkeypatch):
+    """Pin the summary clock, so the --days cutoff is exactly known."""
+    monkeypatch.setattr(stripe_payments, "_now_timestamp", lambda: DAYS_NOW)
+    return DAYS_NOW
+
+
+def _days_intent(identifier, amount, currency, days_ago):
+    return _by_month_intent(
+        identifier, amount, currency, DAYS_NOW - days_ago * 24 * 60 * 60
+    )
+
+
+def _days_refund(identifier, amount, currency, days_ago):
+    return _by_month_refund(
+        identifier, amount, currency, DAYS_NOW - days_ago * 24 * 60 * 60
+    )
+
+
+@pytest.fixture
+def stripe_days_lists(stripe_api):
+    """Records inside, exactly at the edge of and outside the last 30 days."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _days_intent("pi_1", 123457, "usd", 1),
+            # Exactly 30 days old: the cutoff is inclusive.
+            _days_intent("pi_2", 1000, "eur", 30),
+            # 31 days old: outside the window.
+            _days_intent("pi_3", 9999, "usd", 31),
+        ),
+        "/v1/refunds": _list_payload(
+            _days_refund("re_1", 100, "usd", 1),
+            # 31 days old: outside the window.
+            _days_refund("re_2", 200, "usd", 31),
+        ),
+    }
+    return stripe_api
+
+
+DAYS_SAMPLE_LINES = [
+    "EUR 付款 10.00 退款 0.00 净额 10.00",
+    "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+]
+DAYS_TOTAL_LINE = "合计 付款 1,244.57 退款 1.00 净额 1,243.57"
+
+
+def test_cli_summary_days_totals_only_the_last_30_days(
+    live_key, summary_days_clock, stripe_days_lists, capsys
+):
+    """Acceptance: only window records, cutoff inclusive, total matches."""
+    exit_code = stripe_payments.main(["summary", "--days", "30"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines() == [
+        *DAYS_SAMPLE_LINES,
+        DAYS_TOTAL_LINE,
+    ]
+
+
+def test_summary_days_sends_the_documented_created_filter(
+    live_key, summary_days_clock, stripe_days_lists
+):
+    """Acceptance: both lists take Stripe's documented created[gte] cutoff."""
+    assert stripe_payments.main(["summary", "--days", "30"]) == 0
+
+    assert [request["path"] for request in stripe_days_lists.requests] == [
+        "/v1/payment_intents",
+        "/v1/refunds",
+    ]
+    assert [
+        request["form"]["created[gte]"]
+        for request in stripe_days_lists.requests
+    ] == [[str(DAYS_30_CUTOFF)], [str(DAYS_30_CUTOFF)]]
+
+
+def test_summary_without_days_reads_the_whole_account_as_before(
+    live_key, summary_days_clock, stripe_days_lists, capsys
+):
+    """Acceptance: omitting --days keeps the previous request and output."""
+    assert stripe_payments.main(["summary"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "EUR 付款 10.00 退款 0.00 净额 10.00",
+        "USD 付款 1,334.56 退款 3.00 净额 1,331.56",
+        "合计 付款 1,344.56 退款 3.00 净额 1,341.56",
+    ]
+    for request in stripe_days_lists.requests:
+        assert "created[gte]" not in request["form"]
+
+
+def test_summary_days_by_month_groups_only_the_window(
+    live_key, summary_days_clock, stripe_days_lists, capsys
+):
+    assert (
+        stripe_payments.main(["summary", "--by-month", "--days", "30"])
+        == 0
+    )
+
+    assert capsys.readouterr().out.splitlines() == [
+        "2026-09 EUR 付款 10.00 退款 0.00 净额 10.00",
+        "2026-10 USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+        "合计 付款 1,244.57 退款 1.00 净额 1,243.57",
+    ]
+
+
+def test_summary_days_csv_writes_only_the_window_rows(
+    live_key,
+    summary_days_clock,
+    stripe_days_lists,
+    export_date,
+    tmp_path,
+):
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            [
+                "summary",
+                "--days",
+                "30",
+                "--csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    assert _summary_csv_rows(output_dir) == [
+        SUMMARY_CSV_HEADER,
+        ["EUR", "10.00", "0.00", "10.00"],
+        ["USD", "1,234.57", "1.00", "1,233.57"],
+    ]
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_summary_days_rejects_a_non_positive_window(
+    live_key, stripe_api, value, capsys
+):
+    assert stripe_payments.main(["summary", "--days", value]) == 2
+
+    captured = capsys.readouterr()
+    assert f"error: --days must be positive, got {value}" in captured.err
+    assert captured.out == ""
+    assert stripe_api.requests == []
+
+
+def test_summary_help_describes_the_days_option(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["summary", "--help"])
+
+    assert excinfo.value.code == 0
+    assert "--days" in capsys.readouterr().out
+
+
+def test_module_summary_days_fails_without_the_secret():
+    """The real user entry point: ``python -m stripe_payments summary --days 30``."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != stripe_payments.LIVE_SECRET_KEY_ENV
+    }
+    result = subprocess.run(
+        [sys.executable, "-m", "stripe_payments", "summary", "--days", "30"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
 
 
 def _refund_on(identifier, amount, currency, created):
