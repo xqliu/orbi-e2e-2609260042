@@ -53,6 +53,11 @@
   含边界，如 `summary --days 30`）的付款和退款，通过 Stripe 列表的
   `created[gte]` 过滤参数只读取这个时间段；与 `--by-month`、`--currency`、
   `--quiet`、`--top`、`--csv` 组合时也只看到窗口内记录；不传时输出与以前完全一致。
+- `summary` 子命令新增 `--by-customer`：按「客户（`cus_...`）+ 币种」分组打印付款、
+  退款和净额（例如 `cus_alpha USD 付款 1,234.57 退款 1.00 净额 1,233.57`），退款按
+  其 `payment_intent` 归到那笔付款的客户，没有客户的付款归到 `（未归属客户）` 一行；
+  与 `--csv` 一起用时 CSV 多一列 `客户`，与 `--by-month`、`--currency`、`--quiet`、
+  `--top`、`--days` 可组合；不传时输出与以前完全一致。
 
 ### 变更
 

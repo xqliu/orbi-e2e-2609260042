@@ -321,6 +321,41 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary --by-month 
 
 不传 `--by-month` 时输出与以前完全一致（每个币种一行 + 合计行）。
 
+想按客户看汇总（对账时看每个客户贡献了多少）时加 `--by-customer`：
+
+```sh
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary --by-customer
+```
+
+每个「客户 + 币种」一行（先按客户、再按币种代码排序），行格式与上面相同，只是行首
+多一个客户 id（`cus_...`），例如 `cus_alpha USD 付款 1,234.57 退款 1.00 净额 1,233.57`。
+客户取付款记录上的 `customer`；退款记录没有客户字段，按退款的 `payment_intent` 归到
+那笔付款的客户。没有客户的付款（guest 结账）和找不到对应付款的退款都归到
+`（未归属客户）` 一行，所以各行加起来仍是整个账户的金额。最后仍然只打印一行
+`合计`，数值是这次打印出来的所有客户行的和。例如 cus_alpha 有一笔 usd 付款 1,234.57
+和一笔 usd 退款 1.00、cus_beta 有一笔 eur 付款 10.00、另有一笔无客户的 usd 付款 5.00
+和它的 usd 退款 0.50 时，完整输出是：
+
+```
+cus_alpha USD 付款 1,234.57 退款 1.00 净额 1,233.57
+cus_beta EUR 付款 10.00 退款 0.00 净额 10.00
+（未归属客户） USD 付款 5.00 退款 0.50 净额 4.50
+合计 付款 1,249.57 退款 1.50 净额 1,248.07
+```
+
+`--by-customer` 与 `--csv` 一起用时，CSV 第一列多出一列 `客户`（表头
+`客户,币种,付款,退款,净额`，其余与不加 `--by-customer` 时相同）：
+
+```sh
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary --by-customer --csv
+```
+
+`--currency`（先按币种过滤）、`--quiet`（每行是「客户 + 币种 + 净额」）、`--top`、
+`--days`（只统计窗口内的记录）和 `--by-month` 都可以和 `--by-customer` 一起用；
+与 `--by-month` 一起时每行前面是「客户 + 月份」（如
+`cus_alpha 2026-10 USD 付款 20.00 退款 1.00 净额 19.00`），CSV 表头是
+`客户,月份,币种,付款,退款,净额`。不传 `--by-customer` 时输出与以前完全一致。
+
 只想看每个币种的净收入、不要付款和退款两列时加 `--quiet`：
 
 ```sh

@@ -49,6 +49,9 @@ that talks to the Stripe API with the operator's live secret key.
   prints only the N currencies with the largest net total, largest first
   (Issue #262).  ``--days N`` reads only the payments and refunds created in
   the last N days, so a daily check can ignore older records (Issue #271).
+  ``--by-customer`` groups the lines by paying customer (``cus_...``) and
+  currency instead, attributing a refund to the customer of the payment its
+  ``payment_intent`` names (Issue #285).
 * ``python -m stripe_payments refunds-summary`` prints the refund count and
   amount per ISO week and currency, one line per week and currency, so the
   refunds of a week can be read without filtering the exported CSV files.
@@ -144,6 +147,19 @@ SUMMARY_COLUMNS = ("currency", "payments", "refunds", "net")
 # Issue #248: `summary --by-month` prints one line per month and currency, so
 # its CSV rows carry the month in a leading column first.
 SUMMARY_COLUMNS_BY_MONTH = ("month",) + SUMMARY_COLUMNS
+
+# Issue #285: `summary --by-customer` prints one line per customer and
+# currency, so its CSV rows carry the customer in a leading column first.
+# ``--by-customer --by-month`` groups by both, so the CSV carries both.
+SUMMARY_COLUMNS_BY_CUSTOMER = ("customer",) + SUMMARY_COLUMNS
+SUMMARY_COLUMNS_BY_CUSTOMER_AND_MONTH = (
+    "customer",
+) + SUMMARY_COLUMNS_BY_MONTH
+
+# Issue #285: a payment without a customer and a refund whose payment is not
+# among the read payments have no customer to group under, so they share one
+# explicit group instead of dropping out of the totals.
+SUMMARY_UNATTRIBUTED_CUSTOMER = "（未归属客户）"
 
 # Issue #243: the summary ends with one line adding up the printed currencies,
 # so a daily check reads the grand total instead of adding the lines by hand.
@@ -389,13 +405,24 @@ def _created_filter(days: int | None) -> dict:
 
 
 def summarize_data(
-    *, by_month: bool = False, days: int | None = None
-) -> dict[str, tuple[int, int]] | dict[tuple[str, str], tuple[int, int]]:
+    *,
+    by_month: bool = False,
+    by_customer: bool = False,
+    days: int | None = None,
+) -> dict[str, tuple[int, int]] | dict[tuple[str, ...], tuple[int, int]]:
     """Return ``{currency: (payments_total, refunds_total)}`` for the account.
 
     With ``by_month`` the key is ``(YYYY-MM, currency)`` instead (Issue #248),
     the month being the record's own ``created`` timestamp in UTC, so every
     month is totalled on its own.
+
+    With ``by_customer`` the key is ``(customer, currency)`` instead
+    (Issue #285), the customer being the ``customer`` id of the payment.  A
+    refund carries no customer, so it is attributed to the customer of the
+    payment its ``payment_intent`` names; a payment without a customer and a
+    refund whose payment is not in the read list share the
+    ``SUMMARY_UNATTRIBUTED_CUSTOMER`` group.  Both groupings combine to
+    ``(customer, month, currency)``.
 
     With ``days`` both lists take the documented ``created[gte]`` filter
     (Issue #271), so only the records created in the last ``days`` days are
@@ -407,18 +434,34 @@ def summarize_data(
     stripe.api_key = live_secret_key()
     filters = _created_filter(days)
     totals: dict[object, list[int]] = {}
+    # Issue #285: the refunds carry no customer, so ``{payment id: customer}``
+    # maps a refund's ``payment_intent`` to the customer of that payment.  Only
+    # the by-customer grouping needs it, so the plain summary keeps no
+    # per-payment state.
+    payment_customers: dict[str, str | None] = {}
     for payment in _list_all(
         stripe.PaymentIntent, limit=DEFAULT_LIMIT, params=filters
     ):
+        customer = getattr(payment, "customer", None)
+        if by_customer:
+            payment_customers[payment.id] = customer
         key = _summary_key(
-            payment.currency, payment.created, by_month=by_month
+            payment.currency,
+            payment.created,
+            by_month=by_month,
+            by_customer=by_customer,
+            customer=customer,
         )
         totals.setdefault(key, [0, 0])[0] += payment.amount
     for refund in _list_all(
         stripe.Refund, limit=DEFAULT_LIMIT, params=filters
     ):
         key = _summary_key(
-            refund.currency, refund.created, by_month=by_month
+            refund.currency,
+            refund.created,
+            by_month=by_month,
+            by_customer=by_customer,
+            customer=payment_customers.get(refund.payment_intent),
         )
         totals.setdefault(key, [0, 0])[1] += refund.amount
     return {
@@ -428,11 +471,21 @@ def summarize_data(
 
 
 def _summary_key(
-    currency: str, created: object, *, by_month: bool
-) -> str | tuple[str, str]:
-    """The summary total key: the currency, or ``(month, currency)``."""
-    code = currency.lower()
-    return (_month(created), code) if by_month else code
+    currency: str,
+    created: object,
+    *,
+    by_month: bool,
+    by_customer: bool = False,
+    customer: str | None = None,
+) -> str | tuple[str, ...]:
+    """The summary key: the currency, optionally prefixed by its groups."""
+    labels: list[str] = []
+    if by_customer:
+        labels.append(customer or SUMMARY_UNATTRIBUTED_CUSTOMER)
+    if by_month:
+        labels.append(_month(created))
+    labels.append(currency.lower())
+    return labels[0] if len(labels) == 1 else tuple(labels)
 
 
 def _iso_week(created: object) -> str:
@@ -503,7 +556,12 @@ def format_amount(amount: int, currency: str) -> str:
 
 
 def _summary_row(
-    currency: str, payments: int, refunds: int, *, month: str | None = None
+    currency: str,
+    payments: int,
+    refunds: int,
+    *,
+    month: str | None = None,
+    customer: str | None = None,
 ) -> dict:
     """The summary fields: the printed line and the CSV row share them."""
     row = {
@@ -512,24 +570,42 @@ def _summary_row(
         "refunds": _format_number(refunds, currency),
         "net": _format_number(payments - refunds, currency),
     }
+    if customer is not None:
+        row["customer"] = customer
     if month is not None:
         row["month"] = month
     return row
 
 
 def _summary_line(
-    currency: str, payments: int, refunds: int, *, month: str | None = None
+    currency: str,
+    payments: int,
+    refunds: int,
+    *,
+    month: str | None = None,
+    customer: str | None = None,
 ) -> str:
     """One summary line for a currency, e.g. ``USD 付款 1,234.56 ...``.
 
     A ``month`` prefixes the same line with that UTC month (Issue #248), e.g.
-    ``2026-10 USD 付款 1,234.57 退款 1.00 净额 1,233.57``.
+    ``2026-10 USD 付款 1,234.57 退款 1.00 净额 1,233.57``; a ``customer``
+    prefixes the customer id instead (Issue #285), and both prefix the line
+    customer first: ``cus_alpha 2026-10 USD ...``.
     """
-    row = _summary_row(currency, payments, refunds, month=month)
-    prefix = f"{month} " if month is not None else ""
+    row = _summary_row(
+        currency, payments, refunds, month=month, customer=customer
+    )
+    prefix = _summary_prefix(customer=customer, month=month)
     return (
         f"{prefix}{row['currency']} 付款 {row['payments']} "
         f"退款 {row['refunds']} 净额 {row['net']}"
+    )
+
+
+def _summary_prefix(*, customer: str | None, month: str | None) -> str:
+    """The grouping labels in front of a summary line, customer first."""
+    return "".join(
+        f"{label} " for label in (customer, month) if label is not None
     )
 
 
@@ -546,17 +622,25 @@ def _summary_net_hundredths(currency: str, payments: int, refunds: int) -> int:
 
 
 def _summary_net_line(
-    currency: str, payments: int, refunds: int, *, month: str | None = None
+    currency: str,
+    payments: int,
+    refunds: int,
+    *,
+    month: str | None = None,
+    customer: str | None = None,
 ) -> str:
     """One net-only summary line, e.g. ``USD 1,233.57`` (Issue #260).
 
     ``--quiet`` prints only the net total per currency, so a script (or a quick
     daily look) does not have to parse the payments and refunds columns.  A
     ``month`` prefixes the line like the full by-month line does, e.g.
-    ``2026-10 USD 1,233.57``.
+    ``2026-10 USD 1,233.57``; a ``customer`` prefixes it like the by-customer
+    line does (Issue #285), e.g. ``cus_alpha USD 1,233.57``.
     """
-    row = _summary_row(currency, payments, refunds, month=month)
-    prefix = f"{month} " if month is not None else ""
+    row = _summary_row(
+        currency, payments, refunds, month=month, customer=customer
+    )
+    prefix = _summary_prefix(customer=customer, month=month)
     return f"{prefix}{row['currency']} {row['net']}"
 
 
@@ -575,18 +659,31 @@ def _summary_total_line(payments: int, refunds: int) -> str:
 
 
 def write_summary_csv(
-    rows: Sequence[dict], *, output_dir: str, by_month: bool = False
+    rows: Sequence[dict],
+    *,
+    output_dir: str,
+    by_month: bool = False,
+    by_customer: bool = False,
 ) -> Path:
     """Write the summary rows to ``<output_dir>/summary-<date>.csv``.
 
     The file name carries the UTC export date like the ``export`` files do
     (Issue #230), so two days of summaries do not overwrite each other.  With
-    ``by_month`` the rows carry a leading ``month`` column (Issue #248).
+    ``by_month`` the rows carry a leading ``month`` column (Issue #248); with
+    ``by_customer`` a leading ``customer`` column (Issue #285), both when the
+    two groupings are combined.
     """
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"summary-{export_date()}.csv"
-    columns = SUMMARY_COLUMNS_BY_MONTH if by_month else SUMMARY_COLUMNS
+    if by_customer and by_month:
+        columns = SUMMARY_COLUMNS_BY_CUSTOMER_AND_MONTH
+    elif by_customer:
+        columns = SUMMARY_COLUMNS_BY_CUSTOMER
+    elif by_month:
+        columns = SUMMARY_COLUMNS_BY_MONTH
+    else:
+        columns = SUMMARY_COLUMNS
     _write_csv(path, columns, rows)
     return path
 
@@ -749,6 +846,14 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     summary.add_argument(
+        "--by-customer",
+        action="store_true",
+        help=(
+            "group the totals by paying customer (cus_...) and currency, one "
+            "line per customer and currency; omitted, one line per currency"
+        ),
+    )
+    summary.add_argument(
         "--top",
         type=int,
         default=None,
@@ -882,38 +987,65 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ConfigurationError(
                     f"--days must be positive, got {args.days}"
                 )
-            totals = summarize_data(by_month=args.by_month, days=args.days)
+            totals = summarize_data(
+                by_month=args.by_month,
+                by_customer=args.by_customer,
+                days=args.days,
+            )
             entries = []
             for key in sorted(totals):
-                month, code = key if args.by_month else (None, key)
+                # Issue #285: a grouped key is ``(..., currency)``, the plain
+                # key is just the currency; the labels are its prefix.
+                labels = key if isinstance(key, tuple) else (key,)
+                code = labels[-1]
+                customer = labels[0] if args.by_customer else None
+                month = labels[-2] if args.by_month else None
                 if currency is not None and code != currency:
                     continue
                 payments, refunds = totals[key]
-                entries.append((month, code, payments, refunds))
+                entries.append((customer, month, code, payments, refunds))
             if args.top is not None:
                 # Issue #262: keep the N largest net totals, largest first;
-                # equal nets keep the sorted month/currency order.
+                # equal nets keep the sorted customer/month/currency order.
                 entries = sorted(
                     entries,
                     key=lambda entry: -_summary_net_hundredths(
-                        entry[1], entry[2], entry[3]
+                        entry[2], entry[3], entry[4]
                     ),
                 )[: args.top]
             rows = []
             total_payments = 0
             total_refunds = 0
-            for month, code, payments, refunds in entries:
+            for customer, month, code, payments, refunds in entries:
                 if args.quiet:
                     # Issue #260: only the net total per currency.
                     print(
                         _summary_net_line(
-                            code, payments, refunds, month=month
+                            code,
+                            payments,
+                            refunds,
+                            month=month,
+                            customer=customer,
                         )
                     )
                 else:
-                    print(_summary_line(code, payments, refunds, month=month))
+                    print(
+                        _summary_line(
+                            code,
+                            payments,
+                            refunds,
+                            month=month,
+                            customer=customer,
+                        )
+                    )
                 rows.append(
-                    _summary_row(code, payments, refunds, month=month)
+                    _summary_row(
+                        code,
+                        payments,
+                        refunds,
+                        month=month,
+                        customer=customer,
+                    )
                 )
                 total_payments += _summary_hundredths(payments, code)
                 total_refunds += _summary_hundredths(refunds, code)
@@ -922,7 +1054,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(_summary_total_line(total_payments, total_refunds))
             if args.csv:
                 path = write_summary_csv(
-                    rows, output_dir=args.output_dir, by_month=args.by_month
+                    rows,
+                    output_dir=args.output_dir,
+                    by_month=args.by_month,
+                    by_customer=args.by_customer,
                 )
                 if not args.quiet:
                     print(f"exported summary rows={len(rows)} to {path}")
