@@ -435,13 +435,16 @@ def summarize_data(
     filters = _created_filter(days)
     totals: dict[object, list[int]] = {}
     # Issue #285: the refunds carry no customer, so ``{payment id: customer}``
-    # maps a refund's ``payment_intent`` to the customer of that payment.
+    # maps a refund's ``payment_intent`` to the customer of that payment.  Only
+    # the by-customer grouping needs it, so the plain summary keeps no
+    # per-payment state.
     payment_customers: dict[str, str | None] = {}
     for payment in _list_all(
         stripe.PaymentIntent, limit=DEFAULT_LIMIT, params=filters
     ):
         customer = getattr(payment, "customer", None)
-        payment_customers[payment.id] = customer
+        if by_customer:
+            payment_customers[payment.id] = customer
         key = _summary_key(
             payment.currency,
             payment.created,
