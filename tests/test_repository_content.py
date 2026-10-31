@@ -94,6 +94,12 @@ README_RUN_TESTS_LINE = (
     "（与 CI 的 `Run tests` 步骤同一个命令，详见 [运行测试](#运行测试)）。"
 )
 
+# Issue #284 opens the README with a 「快速开始」 section so a first-time visitor
+# sees the test command, where to run it and the line a passing run prints.
+README_QUICK_START_HEADING = "## 快速开始"
+README_QUICK_START_COMMAND = "python -m pytest -q"
+README_QUICK_START_LOCATION = "仓库根目录"
+
 # The `功能建议` template is offered by its Chinese `name` and promises its
 # author the two sections the request asked for.
 FEATURE_REQUEST_NAME = "功能建议"
@@ -237,6 +243,30 @@ def test_readme_documents_the_missing_pytest_repair():
     assert README_RUN_TESTS_DEPENDENCIES in body, (
         f"the {README_RUN_TESTS_HEADING!r} section must show the repair "
         f"command {README_RUN_TESTS_DEPENDENCIES!r}"
+    )
+
+
+def test_readme_has_a_quick_start_section():
+    """Issue #284: a 「快速开始」 section runs every test with one command."""
+    body = _readme_section(README_QUICK_START_HEADING)
+    assert README_QUICK_START_COMMAND in body, (
+        f"the {README_QUICK_START_HEADING!r} section must show "
+        f"{README_QUICK_START_COMMAND!r}"
+    )
+    # The documented command is the one CI runs, so the section cannot drift
+    # away from the real test entry point.
+    assert README_QUICK_START_COMMAND in _read(WORKFLOW), (
+        f"the CI Run tests step must use {README_QUICK_START_COMMAND!r}"
+    )
+    # A first-time reader must know where to type the command and what a
+    # passing run prints, so the section states both.
+    assert README_QUICK_START_LOCATION in body, (
+        f"the {README_QUICK_START_HEADING!r} section must say the command runs "
+        f"in the {README_QUICK_START_LOCATION!r}"
+    )
+    assert re.search(r"\b\d+ passed", body), (
+        f"the {README_QUICK_START_HEADING!r} section must show a sample "
+        "passing pytest summary line, e.g. '180 passed'"
     )
 
 
