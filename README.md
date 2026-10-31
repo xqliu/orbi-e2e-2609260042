@@ -525,3 +525,4 @@ python -m pytest
 
 This repository is used for Orbi beta end-to-end checks (v0.7.28 promotion gate)
 Beta regression: Gemini native protocol hotfix v0.7.40.
+本项目以 MIT 许可证发布。

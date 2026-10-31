@@ -64,8 +64,11 @@ ISSUE_TEMPLATE_FRONT_MATTER_KEYS = ("name", "about")
 # Issue #39 appends this exact line as the README's final line.
 # Issue #55 appends this exact line as the new README final line.
 # Issue #97 appends this exact line as the new README final line.
-# Issue #120 appends this exact line as the new README final line.
-README_LAST_LINE = "Beta regression: Gemini native protocol hotfix v0.7.40."
+# Issue #120 appends this exact line as the new README final line; Issue #282
+# appends the license line after it, so it stays in the README, not at the end.
+README_REGRESSION_LINE = "Beta regression: Gemini native protocol hotfix v0.7.40."
+# Issue #282 appends this exact line as the new README final line.
+README_LAST_LINE = "本项目以 MIT 许可证发布。"
 ISSUE_TEMPLATE_SECTIONS = (
     "## User outcome",
     "## Preconditions",
@@ -264,11 +267,17 @@ def test_readme_states_the_test_command_up_front():
     )
 
 
-def test_readme_ends_with_regression_line():
+def test_readme_ends_with_the_license_line():
+    """Issue #282: the README's last line states the project's MIT license."""
     lines = [line for line in _read(README).splitlines() if line.strip()]
     assert lines[-1] == README_LAST_LINE, (
         f"the README must end with the {README_LAST_LINE!r} line, "
         f"got {lines[-1]!r}"
+    )
+    # Issue #120's regression marker stays in the README, right above the
+    # license line, so appending the license note does not drop it.
+    assert README_REGRESSION_LINE in lines, (
+        f"the README must still carry the {README_REGRESSION_LINE!r} line"
     )
 
 
