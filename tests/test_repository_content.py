@@ -83,6 +83,13 @@ README_TESTS_COMMAND = "python3 -m unittest discover -s tests -v"
 README_RUN_TESTS_HEADING = "## 运行测试"
 README_RUN_TESTS_COMMAND = "python -m pytest"
 README_RUN_TESTS_DEPENDENCIES = "python -m pip install pytest stripe"
+# Issue #277: one line in the README intro states how to run the tests, so a
+# reader sees the command on the first screen; it links to the detailed
+# 「运行测试」 section.
+README_RUN_TESTS_LINE = (
+    "运行测试：在仓库根目录执行 `python -m pytest`"
+    "（与 CI 的 `Run tests` 步骤同一个命令，详见 [运行测试](#运行测试)）。"
+)
 
 # The `功能建议` template is offered by its Chinese `name` and promises its
 # author the two sections the request asked for.
@@ -227,6 +234,33 @@ def test_readme_documents_the_missing_pytest_repair():
     assert README_RUN_TESTS_DEPENDENCIES in body, (
         f"the {README_RUN_TESTS_HEADING!r} section must show the repair "
         f"command {README_RUN_TESTS_DEPENDENCIES!r}"
+    )
+
+
+def test_readme_states_the_test_command_up_front():
+    """Issue #277: the README intro states how to run the tests in one line."""
+    text = _read(README)
+    assert README_RUN_TESTS_LINE in text, (
+        f"the README needs the line {README_RUN_TESTS_LINE!r}"
+    )
+    intro = text.split("\n## ", 1)[0]
+    assert README_RUN_TESTS_LINE in intro, (
+        "the run-the-tests line must sit in the README intro, before the "
+        "first `## ` section"
+    )
+    # The documented command is the one CI runs, so the line cannot drift away
+    # from the real test entry point.
+    assert README_RUN_TESTS_COMMAND in README_RUN_TESTS_LINE
+    assert README_RUN_TESTS_COMMAND in _read(WORKFLOW), (
+        f"the CI Run tests step must use {README_RUN_TESTS_COMMAND!r}"
+    )
+    # The link resolves to the heading that carries the detailed instructions.
+    anchor = README_RUN_TESTS_LINE.split("](#", 1)[1].split(")", 1)[0]
+    assert anchor == README_RUN_TESTS_HEADING.removeprefix("## "), (
+        f"the link must target the {README_RUN_TESTS_HEADING!r} heading"
+    )
+    assert f"\n{README_RUN_TESTS_HEADING}\n" in text, (
+        f"the README needs a {README_RUN_TESTS_HEADING!r} section"
     )
 
 
