@@ -3303,7 +3303,7 @@ def _dated_export_file(output_dir, name, extension):
     return matches[0]
 
 
-def _run_module_export(server, arguments, tmp_path):
+def _run_module_command(server, arguments, tmp_path):
     """Run ``python -m stripe_payments <arguments>`` against the recorder."""
     shim = tmp_path / "sdk_shim"
     shim.mkdir(exist_ok=True)
@@ -3378,7 +3378,7 @@ def test_module_export_email_writes_only_that_customers_records(
     }
     output_dir = tmp_path / "export"
 
-    result = _run_module_export(
+    result = _run_module_command(
         server,
         [
             "export",
@@ -3499,7 +3499,7 @@ def test_module_export_email_unknown_address_fails_without_writing_files(
     recorder.list_payloads = {"/v1/customers": _list_payload()}
     output_dir = tmp_path / "export"
 
-    result = _run_module_export(
+    result = _run_module_command(
         server,
         [
             "export",
@@ -3521,3 +3521,144 @@ def test_module_export_email_unknown_address_fails_without_writing_files(
     ]
     assert recorder.requests[0]["form"]["email"] == ["nobody@example.com"]
     assert not output_dir.exists()
+
+
+# --- summary --days 7 (Issue #246) --------------------------------------
+#
+# Issue #246 accepts the last-7-days summary: ``summary --days 7`` totals only
+# the payments and refunds created in the last 7 days, older records stay out
+# and the command still succeeds.  The in-process tests pin the clock, so the
+# 7-day cutoff and the record ages are exact; the last test runs the user
+# command itself, ``python -m stripe_payments summary --days 7``, against the
+# local recorder.
+
+# The pinned clock is DAYS_NOW, so the 7-day cutoff and the record ages
+# below are exact and the Stripe request stays deterministic.
+DAYS_7_CUTOFF = DAYS_NOW - 7 * 24 * 60 * 60
+
+DAYS_7_SAMPLE_LINES = [
+    # eur: 10.00 payments - 0.50 refunds = 9.50 net.
+    "EUR 付款 10.00 退款 0.50 净额 9.50",
+    # usd: 1,234.57 payments - 1.00 refunds = 1,233.57 net.
+    "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+]
+# 1,244.57 - 1.50 = 1,243.07, so the total adds up the two printed rows only.
+DAYS_7_TOTAL_LINE = "合计 付款 1,244.57 退款 1.50 净额 1,243.07"
+
+
+@pytest.fixture
+def stripe_week_lists(stripe_api):
+    """Records inside, exactly at the edge of and outside the last 7 days."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _days_intent("pi_1", 123457, "usd", 1),
+            # Exactly 7 days old: the cutoff is inclusive.
+            _days_intent("pi_2", 1000, "eur", 7),
+            # 8 days old: outside the 7-day window.
+            _days_intent("pi_3", 9999, "usd", 8),
+        ),
+        "/v1/refunds": _list_payload(
+            _days_refund("re_1", 100, "usd", 1),
+            # Exactly 7 days old: the cutoff is inclusive.
+            _days_refund("re_2", 50, "eur", 7),
+            # 8 days old: outside the 7-day window.
+            _days_refund("re_3", 200, "usd", 8),
+        ),
+    }
+    return stripe_api
+
+
+def test_summary_days_7_totals_only_the_last_7_days(
+    live_key, summary_days_clock, stripe_week_lists, capsys
+):
+    """Acceptance: 7-day totals, cutoff inclusive, older rows stay out."""
+    exit_code = stripe_payments.main(["summary", "--days", "7"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines() == [
+        *DAYS_7_SAMPLE_LINES,
+        DAYS_7_TOTAL_LINE,
+    ]
+
+
+def test_summary_days_7_sends_the_7_day_cutoff_to_both_lists(
+    live_key, summary_days_clock, stripe_week_lists
+):
+    """Both lists read the window via Stripe's created[gte] filter."""
+    assert stripe_payments.main(["summary", "--days", "7"]) == 0
+
+    assert [request["path"] for request in stripe_week_lists.requests] == [
+        "/v1/payment_intents",
+        "/v1/refunds",
+    ]
+    assert [
+        request["form"]["created[gte]"]
+        for request in stripe_week_lists.requests
+    ] == [[str(DAYS_7_CUTOFF)], [str(DAYS_7_CUTOFF)]]
+
+
+def test_summary_days_7_succeeds_when_every_record_is_older(
+    live_key, summary_days_clock, stripe_api, capsys
+):
+    """Acceptance: only 8-day-old data, no rows, exit code 0, no error."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _days_intent("pi_old", 5000, "usd", 8)
+        ),
+        "/v1/refunds": _list_payload(_days_refund("re_old", 300, "usd", 8)),
+    }
+
+    exit_code = stripe_payments.main(["summary", "--days", "7"])
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_module_summary_days_7_totals_only_the_last_7_days(
+    local_stripe_server, tmp_path
+):
+    """Acceptance: the user command totals only the last 7 days."""
+    recorder, server = local_stripe_server
+    before = int(datetime.now(timezone.utc).timestamp())
+    one_day_ago = before - 24 * 60 * 60
+    eight_days_ago = before - 8 * 24 * 60 * 60
+    recorder.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _by_month_intent("pi_1", 123457, "usd", one_day_ago),
+            # Older than the window: must not reach the printed totals.
+            _by_month_intent("pi_2", 9999, "usd", eight_days_ago),
+        ),
+        "/v1/refunds": _list_payload(
+            _by_month_refund("re_1", 100, "usd", one_day_ago),
+            # Older than the window: must not reach the printed totals.
+            _by_month_refund("re_2", 200, "usd", eight_days_ago),
+        ),
+    }
+
+    result = _run_module_command(
+        server, ["summary", "--days", "7"], tmp_path
+    )
+    after = int(datetime.now(timezone.utc).timestamp())
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout.splitlines() == [
+        "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+        "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
+    ]
+
+    assert [request["path"] for request in recorder.requests] == [
+        "/v1/payment_intents",
+        "/v1/refunds",
+    ]
+    cutoffs = {
+        int(request["form"]["created[gte]"][0])
+        for request in recorder.requests
+    }
+    assert len(cutoffs) == 1, cutoffs
+    # The command's own run time is the 7*24-hour cutoff, so it lies between
+    # the subprocess start and its exit.
+    cutoff = cutoffs.pop()
+    assert before - 7 * 24 * 60 * 60 <= cutoff <= after - 7 * 24 * 60 * 60
