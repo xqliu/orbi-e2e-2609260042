@@ -3955,3 +3955,118 @@ def test_module_summary_by_month_adds_up_to_the_plain_summary(
         "USD 付款 17.00 退款 1.00 净额 16.00",
         "合计 付款 17.00 退款 1.00 净额 16.00",
     ]
+
+
+# --- refunds-summary real entry point (Issue #275) ----------------------
+#
+# Issue #275 accepts the weekly refund statistics at the documented user
+# command, ``python -m stripe_payments refunds-summary``: the refunds are
+# grouped by ISO week, not by the previous calendar-month statistic.  The
+# in-process tests above already pin the week grouping; the tests below run
+# the user command itself as its own process against the local recorder, so
+# the grouping is verified at the real entry point with the real official
+# SDK.  The records are chosen so the two statistics disagree: refunds of one
+# calendar month in two ISO weeks split into two lines, while refunds of two
+# calendar months in one ISO week join into one line.
+
+MONTH_LABEL_RE = re.compile(r"^\d{4}-\d{2} ")
+
+
+def _assert_week_lines_only(lines):
+    """Every printed line starts with an ISO week label, never a month one."""
+    assert lines, "refunds-summary printed no line"
+    for line in lines:
+        assert not MONTH_LABEL_RE.match(line), (
+            f"the previous calendar-month statistic is still printed: {line!r}"
+        )
+        _parse_refund_week_line(line)
+
+
+def test_module_refunds_summary_groups_the_refunds_by_iso_week(
+    local_stripe_server, tmp_path
+):
+    """Issue #275 Acceptance: 退款数据按周分组统计，不再沿用原有口径。"""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/refunds": _list_payload(
+            # Monday 2026-09-28 is in ISO week 40 of September.
+            _refund_on("re_1", 900, "usd", _utc(2026, 9, 28)),
+            # Thursday 2026-10-01 is still ISO week 40, but October: the week
+            # statistic joins the two, the month statistic would split them.
+            _refund_on("re_2", 150, "usd", _utc(2026, 10, 1)),
+            # 2026-10-28 and 2026-10-30 are ISO week 44, one calendar month:
+            # the month statistic would put them in one line as well.
+            _refund_on("re_3", 100, "usd", _utc(2026, 10, 28)),
+            _refund_on("re_4", 250, "usd", _utc(2026, 10, 30)),
+            _refund_on("re_5", 500, "eur", _utc(2026, 10, 29)),
+            # Monday 2026-11-02 starts ISO week 45, a new line for usd.
+            _refund_on("re_6", 50, "usd", _utc(2026, 11, 2)),
+        )
+    }
+
+    result = _run_module_command(server, ["refunds-summary"], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    # One line per ISO week and currency, sorted by week then currency:
+    # 9.00 + 1.50 of week 40, 5.00 eur and 1.00 + 2.50 of week 44, 0.50 of
+    # week 45.
+    lines = result.stdout.splitlines()
+    assert lines == [
+        "2026-W40 usd 退款 2 笔 10.50",
+        "2026-W44 eur 退款 1 笔 5.00",
+        "2026-W44 usd 退款 2 笔 3.50",
+        "2026-W45 usd 退款 1 笔 0.50",
+    ]
+    _assert_week_lines_only(lines)
+
+    # The week rows cover every refund, so no record is lost by the change.
+    parsed = [_parse_refund_week_line(line) for line in lines]
+    assert sum(count for _, _, count, _ in parsed) == 6
+    totals = {}
+    for _, currency, _, amount in parsed:
+        totals[currency] = round(totals.get(currency, 0.0) + amount, 2)
+    assert totals == {"usd": 14.50, "eur": 5.00}
+
+    # The command still reads the whole Refunds list only, as documented.
+    assert [request["path"] for request in recorder.requests] == [
+        "/v1/refunds"
+    ]
+    assert [request["form"].get("limit") for request in recorder.requests] == [
+        ["10"]
+    ]
+    for request in recorder.requests:
+        assert "created[gte]" not in request["form"]
+        assert request["authorization"] == "Bearer sk_live_test_key"
+
+
+def test_module_refunds_summary_uses_the_iso_week_year_across_a_year_boundary(
+    local_stripe_server, tmp_path
+):
+    """The week labels use the ISO week year, not the calendar month."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/refunds": _list_payload(
+            # 2026-12-31 (Thursday) and 2027-01-01 (Friday) are both ISO week
+            # 53 of ISO year 2026: one line, although two calendar months.
+            _refund_on("re_1", 100, "usd", _utc(2026, 12, 31)),
+            _refund_on("re_2", 250, "usd", _utc(2027, 1, 1)),
+            # Monday 2027-01-04 starts ISO week 1 of 2027.
+            _refund_on("re_3", 500, "usd", _utc(2027, 1, 4)),
+        )
+    }
+
+    result = _run_module_command(server, ["refunds-summary"], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    lines = result.stdout.splitlines()
+    assert lines == [
+        "2026-W53 usd 退款 2 笔 3.50",
+        "2027-W01 usd 退款 1 笔 5.00",
+    ]
+    _assert_week_lines_only(lines)
+
+    parsed = [_parse_refund_week_line(line) for line in lines]
+    assert sum(count for _, _, count, _ in parsed) == 3
+    assert round(sum(amount for _, _, _, amount in parsed), 2) == 8.50
