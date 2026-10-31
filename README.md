@@ -490,7 +490,19 @@ stripe_payments 0.6.106
 （`checkout`、`verify`、`export`、`summary`、`refunds-summary`）的行为和以前完全
 一样；版本号本身不需要 live 密钥。
 
-## FAQ
+## 常见问题
+
+### Q：导出的文件在哪里？
+
+默认在仓库根目录（执行命令的目录）下的 `export/`：`export` 子命令把文件写到
+`--output-dir` 指定的目录，不传时就是这个 `export/`（已被 `.gitignore` 忽略，
+不会被误提交）。每次导出会写 `payments-<日期>`、`refunds-<日期>`、
+`customers-<日期>` 三组文件，后缀是 `.csv` 和/或 `.json`（`--format` 决定）；
+`summary --csv` 写的是 `summary-<日期>.csv`。文件名里的 `<日期>` 是导出当天的
+UTC 日期（`YYYY-MM-DD`，例如 `payments-2026-10-28.csv`），所以不同天的导出
+不会互相覆盖，同一天重复导出会覆盖同名文件。想换目录就传 `--output-dir`（例如
+`--output-dir 对账`），文件就写到那个目录；命令最后一行
+`exported payments=... refunds=... customers=... to export/` 也会打印出实际目录。
 
 ### Q：这个仓库是什么？为什么不接受 PR？
 

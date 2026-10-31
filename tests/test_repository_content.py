@@ -100,6 +100,11 @@ README_QUICK_START_HEADING = "## 快速开始"
 README_QUICK_START_COMMAND = "python -m pytest -q"
 README_QUICK_START_LOCATION = "仓库根目录"
 
+# Issue #286: the README's 「常见问题」 section opens with the export question,
+# answered with the directory the export command really writes to.
+README_FAQ_HEADING = "## 常见问题"
+README_FAQ_EXPORT_QUESTION = "Q：导出的文件在哪里"
+
 # The `功能建议` template is offered by its Chinese `name` and promises its
 # author the two sections the request asked for.
 FEATURE_REQUEST_NAME = "功能建议"
@@ -833,3 +838,33 @@ def test_readme_documents_the_version_command():
         f"CHANGELOG.md needs a [v{stripe_payments.VERSION}] release entry "
         "matching the printed version"
     )
+
+
+def test_readme_faq_section_answers_where_the_exported_files_go():
+    """Issue #286: the first FAQ answer says where the exported files land."""
+    body = _readme_section(README_FAQ_HEADING)
+    entries = re.split(r"\n### ", body)[1:]
+    assert entries, (
+        f"the {README_FAQ_HEADING!r} section needs question/answer entries"
+    )
+    first = entries[0]
+    assert first.startswith(README_FAQ_EXPORT_QUESTION), (
+        f"the first {README_FAQ_HEADING!r} entry must be "
+        f"{README_FAQ_EXPORT_QUESTION!r}, got {first.splitlines()[0]!r}"
+    )
+    # The answer states the directory the export command really writes to, so
+    # the FAQ cannot drift away from the code's default.
+    directory = stripe_payments.DEFAULT_OUTPUT_DIR
+    assert f"`{directory}/`" in first, (
+        f"the first {README_FAQ_HEADING!r} answer must name the default "
+        f"export directory {directory + '/'!r}"
+    )
+    assert "--output-dir" in first, (
+        f"the first {README_FAQ_HEADING!r} answer must say how to change the "
+        "directory with --output-dir"
+    )
+    for category in ("payments", "refunds", "customers"):
+        assert f"{category}-<日期>" in first, (
+            f"the first {README_FAQ_HEADING!r} answer must name the exported "
+            f"{category}-<日期> files"
+        )
