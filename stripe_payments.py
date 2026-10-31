@@ -857,8 +857,8 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "print only the net total per currency, one net-only line per "
-            "currency (no payments/refunds columns and no total line); "
-            "omitted, the full summary is printed"
+            "currency (no payments/refunds columns, no total line and no "
+            "record-count line); omitted, the full summary is printed"
         ),
     )
     summary.add_argument(
