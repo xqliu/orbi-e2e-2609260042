@@ -563,6 +563,67 @@ def test_readme_documents_the_by_month_csv_month_column():
     )
 
 
+# Issue #285: `summary --by-customer` groups the totals by paying customer.
+# The sample data is the README's by-customer block, rendered through the real
+# line helpers below, so the docs cannot drift from the output.
+SUMMARY_BY_CUSTOMER_SAMPLE_DATA = (
+    ("cus_alpha", "usd", 123457, 100),
+    ("cus_beta", "eur", 1000, 0),
+    ("（未归属客户）", "usd", 500, 50),
+)
+
+
+def test_readme_documents_the_summary_by_customer_option():
+    """Issue #285: the summary section shows the --by-customer usage."""
+    body = _readme_subsection(README_SUMMARY_HEADING)
+    assert "--by-customer" in _subparser_option_strings("summary"), (
+        "the summary subparser must define --by-customer"
+    )
+    assert f"{STRIPE_SUMMARY_COMMAND} --by-customer" in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show "
+        f"{STRIPE_SUMMARY_COMMAND!r} --by-customer"
+    )
+    assert SUMMARY_BY_CUSTOMER_SAMPLE_DATA[2][0] == (
+        stripe_payments.SUMMARY_UNATTRIBUTED_CUSTOMER
+    ), "the sample's last group must be the real unattributed group label"
+    expected = "\n".join(
+        stripe_payments._summary_line(
+            currency, payments, refunds, customer=customer
+        )
+        for customer, currency, payments, refunds in SUMMARY_BY_CUSTOMER_SAMPLE_DATA
+    ) + "\n" + stripe_payments._summary_total_line(
+        sum(
+            stripe_payments._summary_hundredths(payments, currency)
+            for _, currency, payments, _ in SUMMARY_BY_CUSTOMER_SAMPLE_DATA
+        ),
+        sum(
+            stripe_payments._summary_hundredths(refunds, currency)
+            for _, currency, _, refunds in SUMMARY_BY_CUSTOMER_SAMPLE_DATA
+        ),
+    )
+    assert expected in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show the complete "
+        f"`summary --by-customer` output, got:\n{body}"
+    )
+
+
+def test_readme_documents_the_by_customer_csv_customer_column():
+    """Issue #285: `--by-customer --csv` adds the `客户` column to the CSV."""
+    body = _readme_subsection(README_SUMMARY_HEADING)
+    assert f"{STRIPE_SUMMARY_COMMAND} --by-customer --csv" in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show "
+        f"{STRIPE_SUMMARY_COMMAND!r} --by-customer --csv"
+    )
+    header = ",".join(
+        stripe_payments.EXPORT_HEADERS[column]
+        for column in stripe_payments.SUMMARY_COLUMNS_BY_CUSTOMER
+    )
+    assert header in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show the by-customer "
+        f"CSV header row {header!r}"
+    )
+
+
 # Issue #260: `summary --quiet` prints only the net total per currency.
 # The sample data is the README's quiet output block, rendered through the real
 # `_summary_net_line()` below, so the docs cannot drift from the output.

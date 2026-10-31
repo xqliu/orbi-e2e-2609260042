@@ -1027,8 +1027,8 @@ def test_export_writes_nothing_when_a_later_page_fails(
 # --- summary (Issue #221) -----------------------------------------------
 
 
-def _intent(identifier, amount, currency):
-    return {
+def _intent(identifier, amount, currency, customer=None):
+    record = {
         "id": identifier,
         "object": "payment_intent",
         "amount": amount,
@@ -1036,13 +1036,16 @@ def _intent(identifier, amount, currency):
         "status": "succeeded",
         "created": 1700000000,
     }
+    if customer is not None:
+        record["customer"] = customer
+    return record
 
 
-def _refund_record(identifier, amount, currency):
+def _refund_record(identifier, amount, currency, payment_intent="pi_1"):
     return {
         "id": identifier,
         "object": "refund",
-        "payment_intent": "pi_1",
+        "payment_intent": payment_intent,
         "amount": amount,
         "currency": currency,
         "status": "succeeded",
@@ -1517,8 +1520,8 @@ def test_summary_help_describes_the_csv_option(capsys):
 # --- summary --by-month (Issue #248) -----------------------------------
 
 
-def _by_month_intent(identifier, amount, currency, created):
-    return {
+def _by_month_intent(identifier, amount, currency, created, customer=None):
+    record = {
         "id": identifier,
         "object": "payment_intent",
         "amount": amount,
@@ -1526,13 +1529,18 @@ def _by_month_intent(identifier, amount, currency, created):
         "status": "succeeded",
         "created": created,
     }
+    if customer is not None:
+        record["customer"] = customer
+    return record
 
 
-def _by_month_refund(identifier, amount, currency, created):
+def _by_month_refund(
+    identifier, amount, currency, created, payment_intent="pi_by_month_1"
+):
     return {
         "id": identifier,
         "object": "refund",
-        "payment_intent": "pi_by_month_1",
+        "payment_intent": payment_intent,
         "amount": amount,
         "currency": currency,
         "status": "succeeded",
@@ -2332,6 +2340,269 @@ def test_module_summary_days_fails_without_the_secret():
     }
     result = subprocess.run(
         [sys.executable, "-m", "stripe_payments", "summary", "--days", "30"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
+
+
+# --- summary --by-customer (Issue #285) --------------------------------
+
+
+@pytest.fixture
+def stripe_by_customer_lists(stripe_api):
+    """Two customers, a guest payment, as `summary --by-customer` reads them."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _intent("pi_a1", 123456, "usd", customer="cus_alpha"),
+            _intent("pi_a2", 1, "usd", customer="cus_alpha"),
+            _intent("pi_b1", 1000, "eur", customer="cus_beta"),
+            # A guest payment has no customer; its totals still belong to the
+            # account, so they land in the unattributed group.
+            _intent("pi_guest", 500, "usd"),
+        ),
+        "/v1/refunds": _list_payload(
+            # The refund has no customer field: it follows its payment.
+            _refund_record("re_a1", 100, "usd", payment_intent="pi_a1"),
+            _refund_record("re_guest", 50, "usd", payment_intent="pi_guest"),
+        ),
+    }
+    return stripe_api
+
+
+BY_CUSTOMER_SAMPLE_LINES = [
+    "cus_alpha USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+    "cus_beta EUR 付款 10.00 退款 0.00 净额 10.00",
+    "（未归属客户） USD 付款 5.00 退款 0.50 净额 4.50",
+]
+BY_CUSTOMER_TOTAL_LINE = "合计 付款 1,249.57 退款 1.50 净额 1,248.07"
+
+
+def test_cli_summary_by_customer_groups_each_currency_per_customer(
+    live_key, stripe_by_customer_lists, capsys
+):
+    """Acceptance: one line per customer and currency, then the total line."""
+    exit_code = stripe_payments.main(["summary", "--by-customer"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines() == [
+        *BY_CUSTOMER_SAMPLE_LINES,
+        BY_CUSTOMER_TOTAL_LINE,
+    ]
+    # --by-customer changes the grouping only: the same two Stripe lists.
+    assert [
+        request["path"] for request in stripe_by_customer_lists.requests
+    ] == ["/v1/payment_intents", "/v1/refunds"]
+
+
+def test_summary_by_customer_rows_add_up_to_the_plain_summary(
+    live_key, stripe_by_customer_lists, capsys
+):
+    """Acceptance: no record is dropped by the customer grouping."""
+    assert stripe_payments.main(["summary", "--by-customer"]) == 0
+    grouped_lines = capsys.readouterr().out.splitlines()
+    assert grouped_lines[-1] == BY_CUSTOMER_TOTAL_LINE
+    grouped = {}
+    for line in grouped_lines[:-1]:
+        fields = line.split()
+        currency = fields[fields.index("付款") - 1]
+        running = grouped.setdefault(currency, [Decimal(0)] * 3)
+        for index, value in enumerate(_printed_amounts(line)):
+            running[index] += value
+
+    assert stripe_payments.main(["summary"]) == 0
+    plain = {
+        fields[0]: _printed_amounts(line)
+        for line in capsys.readouterr().out.splitlines()
+        if not line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL)
+        for fields in [line.split()]
+    }
+    assert {code: tuple(values) for code, values in grouped.items()} == plain
+
+
+def test_summary_by_customer_attributes_a_refund_to_its_payments_customer(
+    live_key, stripe_api, capsys
+):
+    """A refund follows its payment; an unread one is unattributed."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _intent("pi_a1", 1000, "usd", customer="cus_alpha")
+        ),
+        "/v1/refunds": _list_payload(
+            _refund_record("re_a1", 100, "usd", payment_intent="pi_a1"),
+            # Its payment is not in the read list (for example outside --days),
+            # so the refund gets the explicit unattributed group.
+            _refund_record("re_old", 50, "usd", payment_intent="pi_old"),
+        ),
+    }
+
+    assert stripe_payments.main(["summary", "--by-customer"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "cus_alpha USD 付款 10.00 退款 1.00 净额 9.00",
+        "（未归属客户） USD 付款 0.00 退款 0.50 净额 -0.50",
+        "合计 付款 10.00 退款 1.50 净额 8.50",
+    ]
+
+
+def test_summary_by_customer_follows_the_currency_filter(
+    live_key, stripe_by_customer_lists, capsys
+):
+    assert (
+        stripe_payments.main(["summary", "--by-customer", "--currency", "usd"])
+        == 0
+    )
+
+    assert capsys.readouterr().out.splitlines() == [
+        "cus_alpha USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+        "（未归属客户） USD 付款 5.00 退款 0.50 净额 4.50",
+        "合计 付款 1,239.57 退款 1.50 净额 1,238.07",
+    ]
+
+
+def test_summary_quiet_by_customer_keeps_the_customer_prefix(
+    live_key, stripe_by_customer_lists, capsys
+):
+    assert stripe_payments.main(["summary", "--quiet", "--by-customer"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "cus_alpha USD 1,233.57",
+        "cus_beta EUR 10.00",
+        "（未归属客户） USD 4.50",
+    ]
+
+
+def test_summary_by_customer_csv_adds_the_customer_column(
+    live_key, stripe_by_customer_lists, export_date, tmp_path, capsys
+):
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            [
+                "summary",
+                "--by-customer",
+                "--csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    printed = capsys.readouterr().out.splitlines()
+    assert printed[-2] == BY_CUSTOMER_TOTAL_LINE
+    assert printed[-1] == (
+        f"exported summary rows=3 to {_summary_csv_file(output_dir)}"
+    )
+    assert _summary_csv_rows(output_dir) == [
+        ["客户", "币种", "付款", "退款", "净额"],
+        ["cus_alpha", "USD", "1,234.57", "1.00", "1,233.57"],
+        ["cus_beta", "EUR", "10.00", "0.00", "10.00"],
+        ["（未归属客户）", "USD", "5.00", "0.50", "4.50"],
+    ]
+
+
+def test_summary_by_customer_by_month_prefixes_customer_then_month(
+    live_key, stripe_api, capsys
+):
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _by_month_intent(
+                "pi_1", 1000, "usd", _utc(2026, 9, 10), customer="cus_alpha"
+            ),
+            _by_month_intent(
+                "pi_2", 2000, "usd", _utc(2026, 10, 10), customer="cus_alpha"
+            ),
+            _by_month_intent(
+                "pi_3", 500, "eur", _utc(2026, 10, 11), customer="cus_beta"
+            ),
+        ),
+        "/v1/refunds": _list_payload(
+            _by_month_refund(
+                "re_1",
+                100,
+                "usd",
+                _utc(2026, 10, 12),
+                payment_intent="pi_2",
+            )
+        ),
+    }
+
+    assert (
+        stripe_payments.main(["summary", "--by-customer", "--by-month"])
+        == 0
+    )
+
+    assert capsys.readouterr().out.splitlines() == [
+        "cus_alpha 2026-09 USD 付款 10.00 退款 0.00 净额 10.00",
+        "cus_alpha 2026-10 USD 付款 20.00 退款 1.00 净额 19.00",
+        "cus_beta 2026-10 EUR 付款 5.00 退款 0.00 净额 5.00",
+        "合计 付款 35.00 退款 1.00 净额 34.00",
+    ]
+
+
+def test_summary_by_customer_by_month_csv_has_customer_and_month_columns(
+    live_key, stripe_api, export_date, tmp_path
+):
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _by_month_intent(
+                "pi_1", 1000, "usd", _utc(2026, 9, 10), customer="cus_alpha"
+            )
+        ),
+        "/v1/refunds": _list_payload(),
+    }
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            [
+                "summary",
+                "--by-customer",
+                "--by-month",
+                "--csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    assert _summary_csv_rows(output_dir) == [
+        ["客户", "月份", "币种", "付款", "退款", "净额"],
+        ["cus_alpha", "2026-09", "USD", "10.00", "0.00", "10.00"],
+    ]
+
+
+def test_summary_help_describes_the_by_customer_option(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["summary", "--help"])
+
+    assert excinfo.value.code == 0
+    assert "--by-customer" in capsys.readouterr().out
+
+
+def test_module_summary_by_customer_fails_without_the_secret():
+    """The real user entry point: ``python -m stripe_payments summary --by-customer``."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != stripe_payments.LIVE_SECRET_KEY_ENV
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "stripe_payments",
+            "summary",
+            "--by-customer",
+        ],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
