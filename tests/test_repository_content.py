@@ -33,6 +33,8 @@ STRIPE_SUMMARY_COMMAND = "python -m stripe_payments summary"
 SUMMARY_SAMPLE_LINE = "USD 付款 1,234.57 退款 1.00 净额 1,233.57"
 # Issue #243: the summary ends with one all-currency total line.
 SUMMARY_TOTAL_SAMPLE_LINE = "合计 付款 1,244.57 退款 1.00 净额 1,243.57"
+# Issue #290: after the total line the summary prints the record count.
+SUMMARY_COUNT_SAMPLE_LINE = "总笔数 4"
 # Issue #224: the README documents the refunds-summary command and its line format.
 STRIPE_REFUNDS_SUMMARY_COMMAND = "python -m stripe_payments refunds-summary"
 REFUNDS_SUMMARY_SAMPLE_LINE = "2026-W44 usd 退款 2 笔 3.50"
@@ -435,6 +437,25 @@ def test_readme_documents_the_summary_total_line():
     assert label in body, (
         f"the {README_SUMMARY_HEADING!r} section must name the total line "
         f"label {label!r}"
+    )
+
+
+# Issue #290: the summary closes with the number of records it added up.
+def test_readme_documents_the_summary_count_line():
+    body = _readme_subsection(README_SUMMARY_HEADING)
+    assert stripe_payments.SUMMARY_COUNT_LABEL in body, (
+        f"the {README_SUMMARY_HEADING!r} section must name the count line "
+        f"label {stripe_payments.SUMMARY_COUNT_LABEL!r}"
+    )
+    # The documented sample is rendered through the real line helper, so the
+    # docs cannot drift from what `summary` prints.
+    expected = stripe_payments._summary_count_line(4)
+    assert expected == SUMMARY_COUNT_SAMPLE_LINE, (
+        "the sample count line must be the real line format"
+    )
+    assert expected in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show the summary count "
+        f"line {expected!r}"
     )
 
 
