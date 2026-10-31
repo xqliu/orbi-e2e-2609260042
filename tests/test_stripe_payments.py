@@ -3523,6 +3523,185 @@ def test_module_export_email_unknown_address_fails_without_writing_files(
     assert not output_dir.exists()
 
 
+def test_module_export_email_keeps_another_customers_records_out(
+    local_stripe_server, tmp_path
+):
+    """Issue #273 Acceptance: 只导出该客户的记录，其他客户的记录不出现。
+
+    The account also holds a second customer with its own payment and refunds.
+    The lists are answered the way Stripe documents them (Customers by the
+    exact ``email`` filter, PaymentIntents by ``customer``, Refunds by
+    neither), so the other customer's refunds can only be dropped by the
+    command itself.  Every exported file is scanned for that customer's
+    identifiers, so a leaked cell or JSON key fails here even where another
+    test's row assertion would not read it.
+    """
+    recorder, server = local_stripe_server
+    customers = [_customer(1), _customer(2)]
+    payments = [
+        {
+            "id": "pi_1",
+            "object": "payment_intent",
+            "customer": "cus_1",
+            "amount": 2500,
+            "currency": "usd",
+            "status": "succeeded",
+            "created": 1700000000,
+        },
+        {
+            "id": "pi_2",
+            "object": "payment_intent",
+            "customer": "cus_2",
+            "amount": 4200,
+            "currency": "eur",
+            "status": "succeeded",
+            "created": 1700000010,
+        },
+    ]
+    refunds = [
+        {
+            "id": "re_1",
+            "object": "refund",
+            "payment_intent": "pi_1",
+            "amount": 500,
+            "currency": "usd",
+            "status": "succeeded",
+            "created": 1700000100,
+        },
+        {
+            "id": "re_2",
+            "object": "refund",
+            "payment_intent": "pi_2",
+            "amount": 700,
+            "currency": "eur",
+            "status": "succeeded",
+            "created": 1700000200,
+        },
+        {
+            # A refund not tied to a PaymentIntent (Stripe returns it with a
+            # null `payment_intent`): it cannot belong to the requested
+            # customer's payments, so it stays out too.
+            "id": "re_3",
+            "object": "refund",
+            "payment_intent": None,
+            "amount": 300,
+            "currency": "usd",
+            "status": "succeeded",
+            "created": 1700000300,
+        },
+    ]
+    recorder.list_payloads = {
+        "/v1/customers": _list_payload(
+            *[
+                customer
+                for customer in customers
+                if customer["email"] == "buyer1@example.com"
+            ]
+        ),
+        "/v1/payment_intents": _list_payload(
+            *[
+                payment
+                for payment in payments
+                if payment["customer"] == "cus_1"
+            ]
+        ),
+        "/v1/refunds": _list_payload(*refunds),
+    }
+    output_dir = tmp_path / "export"
+
+    result = _run_module_command(
+        server,
+        [
+            "export",
+            "--output-dir",
+            str(output_dir),
+            "--email",
+            "buyer1@example.com",
+        ],
+        tmp_path,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (
+        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+        in result.stdout
+    )
+
+    # Stripe's documented filters: customers by `email`, payments by
+    # `customer`; the Refunds list takes neither, so the command reads it
+    # unfiltered and narrows it itself.
+    assert [request["path"] for request in recorder.requests] == [
+        "/v1/customers",
+        "/v1/payment_intents",
+        "/v1/refunds",
+    ]
+    assert recorder.requests[0]["form"]["email"] == ["buyer1@example.com"]
+    assert recorder.requests[1]["form"]["customer"] == ["cus_1"]
+    assert "customer" not in recorder.requests[2]["form"]
+
+    assert sorted(
+        path.name.split("-")[0] for path in output_dir.iterdir()
+    ) == ["customers", "customers", "payments", "payments", "refunds", "refunds"]
+
+    # 其他客户的记录不出现：六份文件里都没有第二个客户的 id、邮箱、付款或退款。
+    for path in sorted(output_dir.iterdir()):
+        text = path.read_text(encoding="utf-8")
+        for other_customers_record in (
+            "cus_2",
+            "buyer2@example.com",
+            "pi_2",
+            "re_2",
+            "re_3",
+        ):
+            assert other_customers_record not in text, (
+                path.name,
+                other_customers_record,
+            )
+
+    def rows(name):
+        path = _dated_export_file(output_dir, name, "csv")
+        with path.open(newline="", encoding="utf-8") as handle:
+            return list(csv.reader(handle))
+
+    assert rows("payments") == [
+        ["编号", "金额", "币种", "状态", "创建时间", "客户邮箱"],
+        [
+            "pi_1",
+            "2500",
+            "usd",
+            "succeeded",
+            "2023-11-14T22:13:20Z",
+            "buyer1@example.com",
+        ],
+    ]
+    assert rows("refunds") == [
+        ["编号", "付款编号", "金额", "币种", "状态", "创建时间"],
+        ["re_1", "pi_1", "500", "usd", "succeeded", "2023-11-14T22:15:00Z"],
+    ]
+    assert rows("customers") == [
+        ["编号", "邮箱", "创建时间"],
+        [
+            "cus_1",
+            "buyer1@example.com",
+            stripe_payments._created(_customer(1)["created"]),
+        ],
+    ]
+    assert json.loads(
+        _dated_export_file(output_dir, "refunds", "json").read_text(
+            encoding="utf-8"
+        )
+    ) == [
+        {
+            "id": "re_1",
+            "payment_intent": "pi_1",
+            "amount": 500,
+            "currency": "usd",
+            "status": "succeeded",
+            "created": "2023-11-14T22:15:00Z",
+        }
+    ]
+
+
 # --- summary --days 7 (Issue #246) --------------------------------------
 #
 # Issue #246 accepts the last-7-days summary: ``summary --days 7`` totals only
