@@ -40,8 +40,10 @@ that talks to the Stripe API with the operator's live secret key.
   that currency's line; omitted, every currency is printed.  After the
   currency rows one all-currency ``合计`` line adds up the printed values
   above it (Issue #243), then one ``总笔数 N`` line gives the number of
-  payment and refund records those rows were totalled from (Issue #290).
-  ``--by-month`` groups the lines by month (UTC) and
+  payment and refund records those rows were totalled from (Issue #290), and
+  one ``平均金额 X`` line gives the average amount per record, the printed
+  total net divided by that count (Issue #292).  ``--by-month`` groups the
+  lines by month (UTC) and
   currency instead (Issue #248).  ``--csv`` also
   writes those same rows to ``summary-<date>.csv`` (one column per summary
   field, so a spreadsheet shows them side by side); omitted, the command only
@@ -170,6 +172,10 @@ SUMMARY_TOTAL_LABEL = "合计"
 # Issue #290: after the total line the summary prints the number of payment and
 # refund records the printed rows were totalled from.
 SUMMARY_COUNT_LABEL = "总笔数"
+
+# Issue #292: the summary closes with the average amount per record, so a
+# daily check reads the typical amount without dividing the totals by hand.
+SUMMARY_AVERAGE_LABEL = "平均金额"
 
 # Issue #271: `summary --days N` reads only the last N days.  The window is a
 # rolling N*24-hour period ending now, and Stripe's documented `created[gte]`
@@ -681,6 +687,30 @@ def _summary_count_line(count: int) -> str:
     return f"{SUMMARY_COUNT_LABEL} {count}"
 
 
+def _average_hundredths(total: int, count: int) -> int:
+    """The average of ``total`` hundredths over ``count`` records.
+
+    Rounded half away from zero, so 1,243.57 over 4 records (310.8925)
+    prints as 310.89 and a negative average keeps its sign (Issue #292).
+    The unit is ``_summary_hundredths()``, like the ``合计`` line.
+    """
+    sign = -1 if total < 0 else 1
+    return sign * ((abs(total) * 2 + count) // (2 * count))
+
+
+def _summary_average_line(total: int, count: int) -> str:
+    """The average-amount line closing the summary, e.g. ``平均金额 310.89``.
+
+    ``total`` is the printed total net in hundredths (``total_payments -
+    total_refunds``) and ``count`` the printed record count, so the average
+    is exactly the values the two lines above it show (Issue #292).
+    """
+    return (
+        f"{SUMMARY_AVERAGE_LABEL} "
+        f"{_format_hundredths(_average_hundredths(total, count))}"
+    )
+
+
 def write_summary_csv(
     rows: Sequence[dict],
     *,
@@ -840,8 +870,9 @@ def _parser() -> argparse.ArgumentParser:
         "summary",
         help=(
             "print payments, refunds and net income totals per currency, "
-            "one currency per line, then one total line adding them up and "
-            "one line giving the record count"
+            "one currency per line, then one total line adding them up, "
+            "one line giving the record count and one line giving the "
+            "average amount"
         ),
     )
     summary.add_argument(
@@ -1080,6 +1111,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(_summary_total_line(total_payments, total_refunds))
                 # Issue #290: the count of the records those rows add up.
                 print(_summary_count_line(total_count))
+                # Issue #292: the average amount per record those rows cover.
+                print(
+                    _summary_average_line(
+                        total_payments - total_refunds, total_count
+                    )
+                )
             if args.csv:
                 path = write_summary_csv(
                     rows,
