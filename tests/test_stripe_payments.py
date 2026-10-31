@@ -1080,6 +1080,8 @@ def test_cli_summary_prints_one_formatted_line_per_currency(
         "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
         # Issue #243: the printed values add up to one total line.
         "合计 付款 1,244.57 退款 1.00 净额 1,243.57",
+        # Issue #290: the count line closes the output.
+        SUMMARY_COUNT_SAMPLE_LINE,
     ]
 
 
@@ -1114,6 +1116,8 @@ def test_summary_totals_every_page(live_key, stripe_api, capsys):
     assert capsys.readouterr().out.splitlines() == [
         "USD 付款 1,234.57 退款 0.00 净额 1,234.57",
         "合计 付款 1,234.57 退款 0.00 净额 1,234.57",
+        # Both pages' payments, no refunds.
+        "总笔数 2",
     ]
 
 
@@ -1178,6 +1182,8 @@ def test_cli_summary_currency_prints_only_that_currency_line(
     assert capsys.readouterr().out.splitlines() == [
         "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
         "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
+        # The two usd payments and the refund behind the printed row.
+        "总笔数 3",
     ]
 
 
@@ -1189,6 +1195,7 @@ def test_cli_summary_currency_is_case_insensitive(
     assert capsys.readouterr().out.splitlines() == [
         "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
         "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
+        "总笔数 3",
     ]
 
 
@@ -1260,7 +1267,9 @@ def test_cli_summary_ends_with_the_all_currency_total_line(
     assert stripe_payments.main(["summary"]) == 0
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[-1] == "合计 付款 1,244.57 退款 1.00 净额 1,243.57"
+    # Issue #290: the count line follows the total line.
+    assert printed[-2] == "合计 付款 1,244.57 退款 1.00 净额 1,243.57"
+    assert printed[-1] == SUMMARY_COUNT_SAMPLE_LINE
 
 
 def test_summary_total_equals_the_sum_of_the_printed_currency_values(
@@ -1270,7 +1279,7 @@ def test_summary_total_equals_the_sum_of_the_printed_currency_values(
     assert stripe_payments.main(["summary"]) == 0
 
     printed = capsys.readouterr().out.splitlines()
-    currency_lines, total_line = printed[:-1], printed[-1]
+    currency_lines, total_line = printed[:-2], printed[-2]
     assert total_line.split()[0] == stripe_payments.SUMMARY_TOTAL_LABEL
     for field in SUMMARY_FIELDS:
         assert _printed_value(total_line, field) == sum(
@@ -1296,6 +1305,8 @@ def test_summary_total_adds_zero_decimal_currency_values(
         "JPY 付款 1,000 退款 0 净额 1,000",
         "USD 付款 1,234.56 退款 0.00 净额 1,234.56",
         "合计 付款 2,234.56 退款 0.00 净额 2,234.56",
+        # Two payments, no refunds.
+        "总笔数 2",
     ]
 
 
@@ -1309,7 +1320,69 @@ def test_summary_total_keeps_a_negative_net(live_key, stripe_api, capsys):
     assert capsys.readouterr().out.splitlines() == [
         "USD 付款 0.50 退款 1.00 净额 -0.50",
         "合计 付款 0.50 退款 1.00 净额 -0.50",
+        # One payment and one refund.
+        "总笔数 2",
     ]
+
+
+# Issue #290: the summary ends with one line giving the number of records the
+# printed rows were totalled from (payments + refunds).
+SUMMARY_COUNT_SAMPLE_LINE = "总笔数 4"
+
+
+def test_cli_summary_ends_with_the_total_record_count(
+    live_key, stripe_summary_lists, capsys
+):
+    """Acceptance: one extra last line shows the record count."""
+    assert stripe_payments.main(["summary"]) == 0
+
+    printed = capsys.readouterr().out.splitlines()
+    # The fixture holds 3 payments and 1 refund, so 4 records were totalled.
+    assert printed[-1] == SUMMARY_COUNT_SAMPLE_LINE
+    assert printed[-2] == SUMMARY_TOTAL_LINE
+
+
+def test_summary_count_matches_the_records_behind_the_printed_rows(
+    live_key, stripe_summary_lists, capsys
+):
+    """Acceptance: the count is the real number of records, not a guess."""
+    assert stripe_payments.main(["summary", "--currency", "usd"]) == 0
+    # Both usd payments and the refund are on the printed usd row.
+    assert capsys.readouterr().out.splitlines()[-1] == "总笔数 3"
+
+    assert stripe_payments.main(["summary", "--top", "1"]) == 0
+    # The usd row has the larger net total, so the count covers that row only.
+    assert capsys.readouterr().out.splitlines()[-1] == "总笔数 3"
+
+
+def test_summary_count_counts_every_record_once_across_the_groups(
+    live_key, stripe_summary_lists, capsys
+):
+    """Grouping splits the records but never counts one twice."""
+    assert stripe_payments.main(["summary", "--by-month"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "总笔数 4"
+
+    assert stripe_payments.main(["summary", "--by-customer"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "总笔数 4"
+
+
+def test_summary_count_line_follows_the_existing_output_rules(
+    live_key, stripe_api, capsys
+):
+    """No rows (or `--quiet`) keeps the output exactly as before."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(),
+        "/v1/refunds": _list_payload(),
+    }
+    assert stripe_payments.main(["summary"]) == 0
+    assert capsys.readouterr().out == ""
+
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(_intent("pi_1", 123456, "usd")),
+        "/v1/refunds": _list_payload(),
+    }
+    assert stripe_payments.main(["summary", "--quiet"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["USD 1,234.56"]
 
 
 # Issue #240: `summary --csv` writes the printed summary rows into a CSV file
@@ -1361,8 +1434,10 @@ def test_cli_summary_csv_writes_a_dated_file_next_to_the_printed_lines(
     printed = capsys.readouterr().out.splitlines()
     assert _summary_lines(printed) == SUMMARY_SAMPLE_LINES
     # Issue #243: the total line prints after the currency rows, before the
-    # file notice, so the notice stays the last printed line.
-    assert printed[-2] == SUMMARY_TOTAL_LINE
+    # file notice, so the notice stays the last printed line; Issue #290 adds
+    # the count line between them.
+    assert printed[-3] == SUMMARY_TOTAL_LINE
+    assert printed[-2] == SUMMARY_COUNT_SAMPLE_LINE
     # The user sees where the file went, like `export` prints its destination.
     assert printed[-1] == (
         f"exported summary rows=2 to {_summary_csv_file(output_dir)}"
@@ -1486,6 +1561,7 @@ def test_summary_without_the_csv_option_writes_no_file(
     assert capsys.readouterr().out.splitlines() == [
         *SUMMARY_SAMPLE_LINES,
         SUMMARY_TOTAL_LINE,
+        SUMMARY_COUNT_SAMPLE_LINE,
     ]
     assert not output_dir.exists()
 
@@ -1575,6 +1651,8 @@ BY_MONTH_SAMPLE_LINES = [
     "2026-10 USD 付款 1,234.57 退款 1.00 净额 1,233.57",
 ]
 BY_MONTH_TOTAL_LINE = "合计 付款 1,754.57 退款 3.50 净额 1,751.07"
+# Issue #290: the count line of the same five payments and three refunds.
+BY_MONTH_COUNT_LINE = "总笔数 8"
 
 
 @pytest.fixture
@@ -1603,6 +1681,7 @@ def _by_month_groups(printed):
         (fields[0], fields[1]): _printed_amounts(line)
         for line in printed
         if not line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL)
+        and not line.startswith(stripe_payments.SUMMARY_COUNT_LABEL)
         for fields in [line.split()]
     }
 
@@ -1639,6 +1718,7 @@ def test_cli_summary_by_month_groups_each_currency_per_month(
     assert capsys.readouterr().out.splitlines() == [
         *BY_MONTH_SAMPLE_LINES,
         BY_MONTH_TOTAL_LINE,
+        BY_MONTH_COUNT_LINE,
     ]
 
 
@@ -1656,7 +1736,9 @@ def test_summary_by_month_values_match_each_months_records(
     assert stripe_payments.main(["summary"]) == 0
     plain = {}
     for line in capsys.readouterr().out.splitlines():
-        if line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL):
+        if line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL) or line.startswith(
+            stripe_payments.SUMMARY_COUNT_LABEL
+        ):
             continue
         fields = line.split()
         plain[fields[0]] = _printed_amounts(line)
@@ -1674,10 +1756,11 @@ def test_summary_by_month_total_line_adds_up_the_printed_groups(
     assert stripe_payments.main(["summary", "--by-month"]) == 0
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[-1] == BY_MONTH_TOTAL_LINE
+    assert printed[-2] == BY_MONTH_TOTAL_LINE
+    assert printed[-1] == BY_MONTH_COUNT_LINE
     payments, refunds, net = _printed_amounts(BY_MONTH_TOTAL_LINE)
     expected_payments = sum(
-        (amounts[0] for amounts in _by_month_groups(printed[:-1]).values()),
+        (amounts[0] for amounts in _by_month_groups(printed[:-2]).values()),
         Decimal(0),
     )
     assert payments == expected_payments
@@ -1703,6 +1786,8 @@ def test_summary_by_month_totals_every_page(live_key, stripe_api, capsys):
         "2026-09 USD 付款 10.00 退款 0.00 净额 10.00",
         "2026-10 USD 付款 20.00 退款 0.00 净额 20.00",
         "合计 付款 30.00 退款 0.00 净额 30.00",
+        # Both pages' payments, no refunds.
+        "总笔数 2",
     ]
 
 
@@ -1717,6 +1802,8 @@ def test_summary_by_month_follows_the_currency_filter(
         "2026-09 USD 付款 10.00 退款 0.50 净额 9.50",
         "2026-10 USD 付款 1,234.57 退款 1.00 净额 1,233.57",
         "合计 付款 1,244.57 退款 1.50 净额 1,243.07",
+        # Three usd payments and two usd refunds behind the printed rows.
+        "总笔数 5",
     ]
 
 
@@ -1751,7 +1838,8 @@ def test_summary_by_month_csv_adds_the_month_column(
     )
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[-2] == BY_MONTH_TOTAL_LINE
+    assert printed[-3] == BY_MONTH_TOTAL_LINE
+    assert printed[-2] == BY_MONTH_COUNT_LINE
     assert printed[-1] == (
         f"exported summary rows=5 to {_summary_csv_file(output_dir)}"
     )
@@ -1829,7 +1917,9 @@ def test_summary_quiet_net_values_equal_the_plain_summary_nets(
     assert stripe_payments.main(["summary"]) == 0
     plain = {}
     for line in capsys.readouterr().out.splitlines():
-        if line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL):
+        if line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL) or line.startswith(
+            stripe_payments.SUMMARY_COUNT_LABEL
+        ):
             continue
         fields = line.split()
         plain[fields[0]] = fields[-1]
@@ -1987,6 +2077,8 @@ def test_cli_summary_top_prints_only_the_largest_net_currencies(
     assert capsys.readouterr().out.splitlines() == [
         *TOP_SAMPLE_LINES,
         TOP_SAMPLE_TOTAL_LINE,
+        # The two usd payments, the usd refund and the eur payment.
+        "总笔数 4",
     ]
     # --top changes the printout only: the same two Stripe lists are read.
     assert [
@@ -2006,6 +2098,8 @@ def test_summary_without_top_prints_every_currency_as_before(
         "JPY 付款 500 退款 0 净额 500",
         "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
         "合计 付款 2,234.57 退款 3.00 净额 2,231.57",
+        # Every record of the four currencies and two refunds.
+        "总笔数 6",
     ]
 
 
@@ -2017,6 +2111,7 @@ def test_summary_top_larger_than_the_currency_count_prints_every_currency(
     assert capsys.readouterr().out.splitlines() == [
         *TOP_ALL_LINES,
         "合计 付款 2,234.57 退款 3.00 净额 2,231.57",
+        "总笔数 6",
     ]
 
 
@@ -2029,6 +2124,8 @@ def test_summary_top_breaks_equal_net_totals_by_currency(
     assert capsys.readouterr().out.splitlines() == [
         *TOP_ALL_LINES[:3],
         "合计 付款 2,234.57 退款 1.00 净额 2,233.57",
+        # The two usd payments, the usd refund, the eur and jpy payments.
+        "总笔数 5",
     ]
 
 
@@ -2064,6 +2161,7 @@ def test_summary_top_follows_the_currency_filter(
     assert capsys.readouterr().out.splitlines() == [
         TOP_SAMPLE_LINES[0],
         "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
+        "总笔数 3",
     ]
 
 
@@ -2076,6 +2174,9 @@ def test_summary_top_by_month_keeps_the_largest_month_currency_groups(
         "2026-10 USD 付款 1,234.57 退款 1.00 净额 1,233.57",
         "2026-09 JPY 付款 500 退款 0 净额 500",
         TOP_SAMPLE_TOTAL_LINE,
+        # Two October usd payments plus October's usd refund, and the September
+        # jpy payment.
+        "总笔数 4",
     ]
 
 
@@ -2099,11 +2200,13 @@ def test_summary_top_csv_writes_only_the_selected_rows(
     )
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[:2] == [
+    assert printed[:3] == [
         TOP_SAMPLE_LINES[0],
         "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
+        # The printed usd row's two payments and one refund.
+        "总笔数 3",
     ]
-    assert printed[2].startswith("exported summary rows=1 to ")
+    assert printed[3].startswith("exported summary rows=1 to ")
     assert _summary_csv_rows(output_dir) == [
         SUMMARY_CSV_HEADER,
         ["USD", "1,234.57", "1.00", "1,233.57"],
@@ -2220,6 +2323,8 @@ DAYS_SAMPLE_LINES = [
     "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
 ]
 DAYS_TOTAL_LINE = "合计 付款 1,244.57 退款 1.00 净额 1,243.57"
+# Issue #290: two payments and one refund inside the 30-day window.
+DAYS_COUNT_LINE = "总笔数 3"
 
 
 def test_cli_summary_days_totals_only_the_last_30_days(
@@ -2232,6 +2337,7 @@ def test_cli_summary_days_totals_only_the_last_30_days(
     assert capsys.readouterr().out.splitlines() == [
         *DAYS_SAMPLE_LINES,
         DAYS_TOTAL_LINE,
+        DAYS_COUNT_LINE,
     ]
 
 
@@ -2261,6 +2367,8 @@ def test_summary_without_days_reads_the_whole_account_as_before(
         "EUR 付款 10.00 退款 0.00 净额 10.00",
         "USD 付款 1,334.56 退款 3.00 净额 1,331.56",
         "合计 付款 1,344.56 退款 3.00 净额 1,341.56",
+        # All three payments and both refunds of the account.
+        "总笔数 5",
     ]
     for request in stripe_days_lists.requests:
         assert "created[gte]" not in request["form"]
@@ -2278,6 +2386,8 @@ def test_summary_days_by_month_groups_only_the_window(
         "2026-09 EUR 付款 10.00 退款 0.00 净额 10.00",
         "2026-10 USD 付款 1,234.57 退款 1.00 净额 1,233.57",
         "合计 付款 1,244.57 退款 1.00 净额 1,243.57",
+        # Only the records inside the window are counted.
+        DAYS_COUNT_LINE,
     ]
 
 
@@ -2382,6 +2492,8 @@ BY_CUSTOMER_SAMPLE_LINES = [
     "（未归属客户） USD 付款 5.00 退款 0.50 净额 4.50",
 ]
 BY_CUSTOMER_TOTAL_LINE = "合计 付款 1,249.57 退款 1.50 净额 1,248.07"
+# Issue #290: four payments and two refunds behind the three groups.
+BY_CUSTOMER_COUNT_LINE = "总笔数 6"
 
 
 def test_cli_summary_by_customer_groups_each_currency_per_customer(
@@ -2394,6 +2506,7 @@ def test_cli_summary_by_customer_groups_each_currency_per_customer(
     assert capsys.readouterr().out.splitlines() == [
         *BY_CUSTOMER_SAMPLE_LINES,
         BY_CUSTOMER_TOTAL_LINE,
+        BY_CUSTOMER_COUNT_LINE,
     ]
     # --by-customer changes the grouping only: the same two Stripe lists.
     assert [
@@ -2407,9 +2520,10 @@ def test_summary_by_customer_rows_add_up_to_the_plain_summary(
     """Acceptance: no record is dropped by the customer grouping."""
     assert stripe_payments.main(["summary", "--by-customer"]) == 0
     grouped_lines = capsys.readouterr().out.splitlines()
-    assert grouped_lines[-1] == BY_CUSTOMER_TOTAL_LINE
+    assert grouped_lines[-2] == BY_CUSTOMER_TOTAL_LINE
+    assert grouped_lines[-1] == BY_CUSTOMER_COUNT_LINE
     grouped = {}
-    for line in grouped_lines[:-1]:
+    for line in grouped_lines[:-2]:
         fields = line.split()
         currency = fields[fields.index("付款") - 1]
         running = grouped.setdefault(currency, [Decimal(0)] * 3)
@@ -2421,6 +2535,7 @@ def test_summary_by_customer_rows_add_up_to_the_plain_summary(
         fields[0]: _printed_amounts(line)
         for line in capsys.readouterr().out.splitlines()
         if not line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL)
+        and not line.startswith(stripe_payments.SUMMARY_COUNT_LABEL)
         for fields in [line.split()]
     }
     assert {code: tuple(values) for code, values in grouped.items()} == plain
@@ -2447,6 +2562,8 @@ def test_summary_by_customer_attributes_a_refund_to_its_payments_customer(
         "cus_alpha USD 付款 10.00 退款 1.00 净额 9.00",
         "（未归属客户） USD 付款 0.00 退款 0.50 净额 -0.50",
         "合计 付款 10.00 退款 1.50 净额 8.50",
+        # The payment plus the two refunds.
+        "总笔数 3",
     ]
 
 
@@ -2462,6 +2579,8 @@ def test_summary_by_customer_follows_the_currency_filter(
         "cus_alpha USD 付款 1,234.57 退款 1.00 净额 1,233.57",
         "（未归属客户） USD 付款 5.00 退款 0.50 净额 4.50",
         "合计 付款 1,239.57 退款 1.50 净额 1,238.07",
+        # Three usd records under cus_alpha and two unattributed ones.
+        "总笔数 5",
     ]
 
 
@@ -2496,7 +2615,8 @@ def test_summary_by_customer_csv_adds_the_customer_column(
     )
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[-2] == BY_CUSTOMER_TOTAL_LINE
+    assert printed[-3] == BY_CUSTOMER_TOTAL_LINE
+    assert printed[-2] == BY_CUSTOMER_COUNT_LINE
     assert printed[-1] == (
         f"exported summary rows=3 to {_summary_csv_file(output_dir)}"
     )
@@ -2544,6 +2664,8 @@ def test_summary_by_customer_by_month_prefixes_customer_then_month(
         "cus_alpha 2026-10 USD 付款 20.00 退款 1.00 净额 19.00",
         "cus_beta 2026-10 EUR 付款 5.00 退款 0.00 净额 5.00",
         "合计 付款 35.00 退款 1.00 净额 34.00",
+        # Three payments and one refund, each counted once.
+        "总笔数 4",
     ]
 
 
@@ -4028,6 +4150,8 @@ def test_summary_days_7_totals_only_the_last_7_days(
     assert capsys.readouterr().out.splitlines() == [
         *DAYS_7_SAMPLE_LINES,
         DAYS_7_TOTAL_LINE,
+        # Two payments and two refunds inside the 7-day window.
+        "总笔数 4",
     ]
 
 
@@ -4097,6 +4221,8 @@ def test_module_summary_days_7_totals_only_the_last_7_days(
     assert result.stdout.splitlines() == [
         "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
         "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
+        # Only the one-day-old payment and refund are in the window.
+        "总笔数 2",
     ]
 
     assert [request["path"] for request in recorder.requests] == [
@@ -4182,6 +4308,8 @@ def test_module_summary_by_month_groups_the_totals_by_month(
     assert result.stdout.splitlines() == [
         *BY_MONTH_MODULE_SAMPLE_LINES,
         BY_MONTH_MODULE_TOTAL_LINE,
+        # Seven payments and three refunds split into the month groups.
+        "总笔数 10",
     ]
 
     # The grouping reads the whole account: the two list requests carry no
@@ -4220,11 +4348,13 @@ def test_module_summary_by_month_adds_up_to_the_plain_summary(
         "2026-09 USD 付款 10.00 退款 0.00 净额 10.00",
         "2026-10 USD 付款 7.00 退款 1.00 净额 6.00",
         "合计 付款 17.00 退款 1.00 净额 16.00",
+        "总笔数 3",
     ]
     # The same records, one line per currency, when --by-month is omitted.
     assert plain.stdout.splitlines() == [
         "USD 付款 17.00 退款 1.00 净额 16.00",
         "合计 付款 17.00 退款 1.00 净额 16.00",
+        "总笔数 3",
     ]
 
 

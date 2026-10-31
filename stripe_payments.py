@@ -39,7 +39,9 @@ that talks to the Stripe API with the operator's live secret key.
   check does not need the exported CSV files.  ``--currency usd`` prints only
   that currency's line; omitted, every currency is printed.  After the
   currency rows one all-currency ``合计`` line adds up the printed values
-  above it (Issue #243).  ``--by-month`` groups the lines by month (UTC) and
+  above it (Issue #243), then one ``总笔数 N`` line gives the number of
+  payment and refund records those rows were totalled from (Issue #290).
+  ``--by-month`` groups the lines by month (UTC) and
   currency instead (Issue #248).  ``--csv`` also
   writes those same rows to ``summary-<date>.csv`` (one column per summary
   field, so a spreadsheet shows them side by side); omitted, the command only
@@ -164,6 +166,10 @@ SUMMARY_UNATTRIBUTED_CUSTOMER = "（未归属客户）"
 # Issue #243: the summary ends with one line adding up the printed currencies,
 # so a daily check reads the grand total instead of adding the lines by hand.
 SUMMARY_TOTAL_LABEL = "合计"
+
+# Issue #290: after the total line the summary prints the number of payment and
+# refund records the printed rows were totalled from.
+SUMMARY_COUNT_LABEL = "总笔数"
 
 # Issue #271: `summary --days N` reads only the last N days.  The window is a
 # rolling N*24-hour period ending now, and Stripe's documented `created[gte]`
@@ -409,8 +415,11 @@ def summarize_data(
     by_month: bool = False,
     by_customer: bool = False,
     days: int | None = None,
-) -> dict[str, tuple[int, int]] | dict[tuple[str, ...], tuple[int, int]]:
-    """Return ``{currency: (payments_total, refunds_total)}`` for the account.
+) -> dict[str, tuple[int, int, int]] | dict[tuple[str, ...], tuple[int, int, int]]:
+    """Return ``{currency: (payments_total, refunds_total, count)}``.
+
+    ``count`` is the number of payment and refund records behind the totals
+    (Issue #290), so the summary prints how many records it added up.
 
     With ``by_month`` the key is ``(YYYY-MM, currency)`` instead (Issue #248),
     the month being the record's own ``created`` timestamp in UTC, so every
@@ -452,7 +461,9 @@ def summarize_data(
             by_customer=by_customer,
             customer=customer,
         )
-        totals.setdefault(key, [0, 0])[0] += payment.amount
+        entry = totals.setdefault(key, [0, 0, 0])
+        entry[0] += payment.amount
+        entry[2] += 1
     for refund in _list_all(
         stripe.Refund, limit=DEFAULT_LIMIT, params=filters
     ):
@@ -463,10 +474,12 @@ def summarize_data(
             by_customer=by_customer,
             customer=payment_customers.get(refund.payment_intent),
         )
-        totals.setdefault(key, [0, 0])[1] += refund.amount
+        entry = totals.setdefault(key, [0, 0, 0])
+        entry[1] += refund.amount
+        entry[2] += 1
     return {
-        key: (payments, refunds)
-        for key, (payments, refunds) in totals.items()
+        key: (payments, refunds, count)
+        for key, (payments, refunds, count) in totals.items()
     }
 
 
@@ -658,6 +671,16 @@ def _summary_total_line(payments: int, refunds: int) -> str:
     )
 
 
+def _summary_count_line(count: int) -> str:
+    """The record-count line closing the summary, e.g. ``总笔数 4``.
+
+    ``count`` is the number of payment and refund records the printed rows
+    were totalled from (Issue #290), so a daily check also knows how many
+    records it covers.
+    """
+    return f"{SUMMARY_COUNT_LABEL} {count}"
+
+
 def write_summary_csv(
     rows: Sequence[dict],
     *,
@@ -817,7 +840,8 @@ def _parser() -> argparse.ArgumentParser:
         "summary",
         help=(
             "print payments, refunds and net income totals per currency, "
-            "one currency per line, then one total line adding them up"
+            "one currency per line, then one total line adding them up and "
+            "one line giving the record count"
         ),
     )
     summary.add_argument(
@@ -833,8 +857,8 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "print only the net total per currency, one net-only line per "
-            "currency (no payments/refunds columns and no total line); "
-            "omitted, the full summary is printed"
+            "currency (no payments/refunds columns, no total line and no "
+            "record-count line); omitted, the full summary is printed"
         ),
     )
     summary.add_argument(
@@ -1002,8 +1026,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 month = labels[-2] if args.by_month else None
                 if currency is not None and code != currency:
                     continue
-                payments, refunds = totals[key]
-                entries.append((customer, month, code, payments, refunds))
+                payments, refunds, count = totals[key]
+                entries.append((customer, month, code, payments, refunds, count))
             if args.top is not None:
                 # Issue #262: keep the N largest net totals, largest first;
                 # equal nets keep the sorted customer/month/currency order.
@@ -1016,7 +1040,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             rows = []
             total_payments = 0
             total_refunds = 0
-            for customer, month, code, payments, refunds in entries:
+            total_count = 0
+            for customer, month, code, payments, refunds, count in entries:
                 if args.quiet:
                     # Issue #260: only the net total per currency.
                     print(
@@ -1049,9 +1074,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 total_payments += _summary_hundredths(payments, code)
                 total_refunds += _summary_hundredths(refunds, code)
+                total_count += count
             if rows and not args.quiet:
                 # Issue #243: the extra last row adds up the printed values.
                 print(_summary_total_line(total_payments, total_refunds))
+                # Issue #290: the count of the records those rows add up.
+                print(_summary_count_line(total_count))
             if args.csv:
                 path = write_summary_csv(
                     rows,
