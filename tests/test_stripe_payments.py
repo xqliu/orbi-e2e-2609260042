@@ -3662,3 +3662,117 @@ def test_module_summary_days_7_totals_only_the_last_7_days(
     # the subprocess start and its exit.
     cutoff = cutoffs.pop()
     assert before - 7 * 24 * 60 * 60 <= cutoff <= after - 7 * 24 * 60 * 60
+
+
+# --- summary --by-month real entry point (Issue #274) -------------------
+#
+# Issue #274 accepts the by-month summary at the documented user command,
+# ``python -m stripe_payments summary --by-month``: the printed totals are
+# grouped by month.  The in-process tests above already pin the grouping; the
+# test below runs the user command itself as its own process against the
+# local recorder, so the grouping is verified at the real entry point with the
+# real official SDK.  The records cross a month boundary and a year boundary,
+# so a record landing in the neighbouring month shows up as a wrong line.
+
+BY_MONTH_MODULE_SAMPLE_LINES = [
+    # 2026-09: usd 10.00 payments and 0.50 refund, plus a 2.00 eur refund.
+    "2026-09 EUR 付款 0.00 退款 2.00 净额 -2.00",
+    # 500 JPY is 500 (zero-decimal), created in the last second of September.
+    "2026-09 JPY 付款 500 退款 0 净额 500",
+    "2026-09 USD 付款 10.00 退款 0.50 净额 9.50",
+    # 2026-10: eur 10.00 payments created in October's first second, usd
+    # 1,234.57 payments (1,234.56 + 0.01) and a 1.00 usd refund.
+    "2026-10 EUR 付款 10.00 退款 0.00 净额 10.00",
+    "2026-10 USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+    # 7.00 usd created in the last second of 2026, 8.00 usd in 2027's first.
+    "2026-12 USD 付款 7.00 退款 0.00 净额 7.00",
+    "2027-01 USD 付款 8.00 退款 0.00 净额 8.00",
+]
+# 10.00 + 500 + 10.00 + 1,234.57 + 7.00 + 8.00 = 1,769.57 payments and
+# 0.50 + 2.00 + 1.00 = 3.50 refunds, so 1,766.07 net.
+BY_MONTH_MODULE_TOTAL_LINE = "合计 付款 1,769.57 退款 3.50 净额 1,766.07"
+
+
+def test_module_summary_by_month_groups_the_totals_by_month(
+    local_stripe_server, tmp_path
+):
+    """Issue #274 Acceptance: 汇总结果按月份分组输出。"""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _by_month_intent("pi_1", 1000, "usd", _utc(2026, 9, 10, 12)),
+            _by_month_intent(
+                "pi_2", 500, "jpy", _utc(2026, 9, 30, 23, 59, 59)
+            ),
+            _by_month_intent(
+                "pi_3", 1000, "eur", _utc(2026, 10, 1, 0, 0, 0)
+            ),
+            _by_month_intent("pi_4", 123456, "usd", _utc(2026, 10, 6, 12)),
+            _by_month_intent("pi_5", 1, "usd", _utc(2026, 10, 31, 23, 59)),
+            _by_month_intent(
+                "pi_6", 700, "usd", _utc(2026, 12, 31, 23, 59, 59)
+            ),
+            _by_month_intent(
+                "pi_7", 800, "usd", _utc(2027, 1, 1, 0, 0, 0)
+            ),
+        ),
+        "/v1/refunds": _list_payload(
+            _by_month_refund("re_1", 50, "usd", _utc(2026, 9, 12, 12)),
+            _by_month_refund("re_2", 200, "eur", _utc(2026, 9, 13, 12)),
+            _by_month_refund("re_3", 100, "usd", _utc(2026, 10, 8, 12)),
+        ),
+    }
+
+    result = _run_module_command(
+        server, ["summary", "--by-month"], tmp_path
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout.splitlines() == [
+        *BY_MONTH_MODULE_SAMPLE_LINES,
+        BY_MONTH_MODULE_TOTAL_LINE,
+    ]
+
+    # The grouping reads the whole account: the two list requests carry no
+    # `created[gte]` window and no other narrowing filter.
+    assert [request["path"] for request in recorder.requests] == [
+        "/v1/payment_intents",
+        "/v1/refunds",
+    ]
+    for request in recorder.requests:
+        assert "created[gte]" not in request["form"]
+
+
+def test_module_summary_by_month_adds_up_to_the_plain_summary(
+    local_stripe_server, tmp_path
+):
+    """The month groups are the same records the plain summary totals."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _by_month_intent("pi_1", 1000, "usd", _utc(2026, 9, 10, 12)),
+            _by_month_intent("pi_2", 700, "usd", _utc(2026, 10, 6, 12)),
+        ),
+        "/v1/refunds": _list_payload(
+            _by_month_refund("re_1", 100, "usd", _utc(2026, 10, 8, 12)),
+        ),
+    }
+
+    by_month = _run_module_command(
+        server, ["summary", "--by-month"], tmp_path
+    )
+    plain = _run_module_command(server, ["summary"], tmp_path)
+
+    assert by_month.returncode == 0, by_month.stderr
+    assert plain.returncode == 0, plain.stderr
+    assert by_month.stdout.splitlines() == [
+        "2026-09 USD 付款 10.00 退款 0.00 净额 10.00",
+        "2026-10 USD 付款 7.00 退款 1.00 净额 6.00",
+        "合计 付款 17.00 退款 1.00 净额 16.00",
+    ]
+    # The same records, one line per currency, when --by-month is omitted.
+    assert plain.stdout.splitlines() == [
+        "USD 付款 17.00 退款 1.00 净额 16.00",
+        "合计 付款 17.00 退款 1.00 净额 16.00",
+    ]
