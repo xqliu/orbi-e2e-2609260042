@@ -375,7 +375,7 @@ USD 付款 1,234.57 退款 1.00 净额 1,233.57
 STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary --days 7
 ```
 
-窗口从运行时刻往前推 7×24 小时，7 天前及更早的付款和退款不参与统计，命令照常打印
+窗口从运行时刻往前推 7×24 小时，早于这个窗口的付款和退款不参与统计，命令照常打印
 窗口内的行并以退出码 0 结束。
 
 `--days` 可以和 `--by-month`（只对窗口内的记录分月）、`--currency`、`--quiet`、
