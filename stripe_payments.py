@@ -42,8 +42,9 @@ that talks to the Stripe API with the operator's live secret key.
   above it (Issue #243), then one ``总笔数 N`` line gives the number of
   payment and refund records those rows were totalled from (Issue #290), and
   one ``平均金额 X`` line gives the average amount per record, the printed
-  total net divided by that count (Issue #292).  ``--by-month`` groups the
-  lines by month (UTC) and
+  total net divided by that count (Issue #292), and one ``最大单笔金额 X``
+  line gives the largest single payment or refund amount behind those rows
+  (Issue #294).  ``--by-month`` groups the lines by month (UTC) and
   currency instead (Issue #248).  ``--csv`` also
   writes those same rows to ``summary-<date>.csv`` (one column per summary
   field, so a spreadsheet shows them side by side); omitted, the command only
@@ -176,6 +177,11 @@ SUMMARY_COUNT_LABEL = "总笔数"
 # Issue #292: the summary closes with the average amount per record, so a
 # daily check reads the typical amount without dividing the totals by hand.
 SUMMARY_AVERAGE_LABEL = "平均金额"
+
+# Issue #294: after the average line the summary prints the largest single
+# payment or refund amount behind the printed lines, so the biggest record of
+# the period is visible without opening the exported CSV files.
+SUMMARY_LARGEST_LABEL = "最大单笔金额"
 
 # Issue #271: `summary --days N` reads only the last N days.  The window is a
 # rolling N*24-hour period ending now, and Stripe's documented `created[gte]`
@@ -421,11 +427,17 @@ def summarize_data(
     by_month: bool = False,
     by_customer: bool = False,
     days: int | None = None,
-) -> dict[str, tuple[int, int, int]] | dict[tuple[str, ...], tuple[int, int, int]]:
-    """Return ``{currency: (payments_total, refunds_total, count)}``.
+) -> (
+    dict[str, tuple[int, int, int, int]]
+    | dict[tuple[str, ...], tuple[int, int, int, int]]
+):
+    """Return ``{currency: (payments_total, refunds_total, count, largest)}``.
 
     ``count`` is the number of payment and refund records behind the totals
-    (Issue #290), so the summary prints how many records it added up.
+    (Issue #290), so the summary prints how many records it added up, and
+    ``largest`` is the biggest single record amount among them in
+    ``_summary_hundredths()`` (Issue #294), so the summary prints the largest
+    single amount too.
 
     With ``by_month`` the key is ``(YYYY-MM, currency)`` instead (Issue #248),
     the month being the record's own ``created`` timestamp in UTC, so every
@@ -467,9 +479,12 @@ def summarize_data(
             by_customer=by_customer,
             customer=customer,
         )
-        entry = totals.setdefault(key, [0, 0, 0])
+        entry = totals.setdefault(key, [0, 0, 0, 0])
         entry[0] += payment.amount
         entry[2] += 1
+        entry[3] = max(
+            entry[3], _summary_hundredths(payment.amount, payment.currency)
+        )
     for refund in _list_all(
         stripe.Refund, limit=DEFAULT_LIMIT, params=filters
     ):
@@ -480,12 +495,15 @@ def summarize_data(
             by_customer=by_customer,
             customer=payment_customers.get(refund.payment_intent),
         )
-        entry = totals.setdefault(key, [0, 0, 0])
+        entry = totals.setdefault(key, [0, 0, 0, 0])
         entry[1] += refund.amount
         entry[2] += 1
+        entry[3] = max(
+            entry[3], _summary_hundredths(refund.amount, refund.currency)
+        )
     return {
-        key: (payments, refunds, count)
-        for key, (payments, refunds, count) in totals.items()
+        key: (payments, refunds, count, largest)
+        for key, (payments, refunds, count, largest) in totals.items()
     }
 
 
@@ -711,6 +729,17 @@ def _summary_average_line(total: int, count: int) -> str:
     )
 
 
+def _summary_largest_line(largest: int) -> str:
+    """The largest-single-amount line closing the summary (Issue #294).
+
+    ``largest`` is the biggest single payment or refund amount behind the
+    printed rows, in ``_summary_hundredths()`` like the ``合计`` line, so the
+    line reads e.g. ``最大单笔金额 1,234.56``.  A refund takes part with its
+    positive Stripe amount, the same records ``总笔数`` counts.
+    """
+    return f"{SUMMARY_LARGEST_LABEL} {_format_hundredths(largest)}"
+
+
 def write_summary_csv(
     rows: Sequence[dict],
     *,
@@ -871,8 +900,8 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "print payments, refunds and net income totals per currency, "
             "one currency per line, then one total line adding them up, "
-            "one line giving the record count and one line giving the "
-            "average amount"
+            "one line giving the record count, one line giving the average "
+            "amount and one line giving the largest single amount"
         ),
     )
     summary.add_argument(
@@ -1057,8 +1086,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 month = labels[-2] if args.by_month else None
                 if currency is not None and code != currency:
                     continue
-                payments, refunds, count = totals[key]
-                entries.append((customer, month, code, payments, refunds, count))
+                payments, refunds, count, largest = totals[key]
+                entries.append(
+                    (customer, month, code, payments, refunds, count, largest)
+                )
             if args.top is not None:
                 # Issue #262: keep the N largest net totals, largest first;
                 # equal nets keep the sorted customer/month/currency order.
@@ -1072,7 +1103,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             total_payments = 0
             total_refunds = 0
             total_count = 0
-            for customer, month, code, payments, refunds, count in entries:
+            total_largest = 0
+            for customer, month, code, payments, refunds, count, largest in (
+                entries
+            ):
                 if args.quiet:
                     # Issue #260: only the net total per currency.
                     print(
@@ -1106,6 +1140,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 total_payments += _summary_hundredths(payments, code)
                 total_refunds += _summary_hundredths(refunds, code)
                 total_count += count
+                total_largest = max(total_largest, largest)
             if rows and not args.quiet:
                 # Issue #243: the extra last row adds up the printed values.
                 print(_summary_total_line(total_payments, total_refunds))
@@ -1117,6 +1152,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         total_payments - total_refunds, total_count
                     )
                 )
+                # Issue #294: the largest single amount those rows cover.
+                print(_summary_largest_line(total_largest))
             if args.csv:
                 path = write_summary_csv(
                     rows,

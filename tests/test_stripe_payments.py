@@ -1082,8 +1082,10 @@ def test_cli_summary_prints_one_formatted_line_per_currency(
         "合计 付款 1,244.57 退款 1.00 净额 1,243.57",
         # Issue #290: the count line closes the output.
         SUMMARY_COUNT_SAMPLE_LINE,
-        # Issue #292: the average line closes the output.
+        # Issue #292: the average line follows the count line.
         SUMMARY_AVERAGE_SAMPLE_LINE,
+        # Issue #294: the largest single amount closes the output.
+        SUMMARY_LARGEST_SAMPLE_LINE,
     ]
 
 
@@ -1121,6 +1123,8 @@ def test_summary_totals_every_page(live_key, stripe_api, capsys):
         # Both pages' payments, no refunds.
         "总笔数 2",
         "平均金额 617.29",
+        # The 1,234.56 usd payment is the biggest record.
+        "最大单笔金额 1,234.56",
     ]
 
 
@@ -1188,6 +1192,7 @@ def test_cli_summary_currency_prints_only_that_currency_line(
         # The two usd payments and the refund behind the printed row.
         "总笔数 3",
         "平均金额 411.19",
+        "最大单笔金额 1,234.56",
     ]
 
 
@@ -1201,6 +1206,7 @@ def test_cli_summary_currency_is_case_insensitive(
         "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
         "总笔数 3",
         "平均金额 411.19",
+        "最大单笔金额 1,234.56",
     ]
 
 
@@ -1273,10 +1279,11 @@ def test_cli_summary_ends_with_the_all_currency_total_line(
 
     printed = capsys.readouterr().out.splitlines()
     # Issue #290: the count line follows the total line; Issue #292 adds the
-    # average line after it.
-    assert printed[-3] == "合计 付款 1,244.57 退款 1.00 净额 1,243.57"
-    assert printed[-2] == SUMMARY_COUNT_SAMPLE_LINE
-    assert printed[-1] == SUMMARY_AVERAGE_SAMPLE_LINE
+    # average line after it and Issue #294 the largest-single-amount line.
+    assert printed[-4] == "合计 付款 1,244.57 退款 1.00 净额 1,243.57"
+    assert printed[-3] == SUMMARY_COUNT_SAMPLE_LINE
+    assert printed[-2] == SUMMARY_AVERAGE_SAMPLE_LINE
+    assert printed[-1] == SUMMARY_LARGEST_SAMPLE_LINE
 
 
 def test_summary_total_equals_the_sum_of_the_printed_currency_values(
@@ -1286,7 +1293,7 @@ def test_summary_total_equals_the_sum_of_the_printed_currency_values(
     assert stripe_payments.main(["summary"]) == 0
 
     printed = capsys.readouterr().out.splitlines()
-    currency_lines, total_line = printed[:-3], printed[-3]
+    currency_lines, total_line = printed[:-4], printed[-4]
     assert total_line.split()[0] == stripe_payments.SUMMARY_TOTAL_LABEL
     for field in SUMMARY_FIELDS:
         assert _printed_value(total_line, field) == sum(
@@ -1315,6 +1322,8 @@ def test_summary_total_adds_zero_decimal_currency_values(
         # Two payments, no refunds.
         "总笔数 2",
         "平均金额 1,117.28",
+        # 1,234.56 usd is bigger than the printed 1,000 jpy.
+        "最大单笔金额 1,234.56",
     ]
 
 
@@ -1331,6 +1340,8 @@ def test_summary_total_keeps_a_negative_net(live_key, stripe_api, capsys):
         # One payment and one refund.
         "总笔数 2",
         "平均金额 -0.25",
+        # The 1.00 refund is the biggest single record.
+        "最大单笔金额 1.00",
     ]
 
 
@@ -1347,10 +1358,11 @@ def test_cli_summary_ends_with_the_total_record_count(
 
     printed = capsys.readouterr().out.splitlines()
     # The fixture holds 3 payments and 1 refund, so 4 records were totalled.
-    assert printed[-2] == SUMMARY_COUNT_SAMPLE_LINE
-    assert printed[-3] == SUMMARY_TOTAL_LINE
-    # Issue #292: the average line is the last line now.
-    assert printed[-1] == SUMMARY_AVERAGE_SAMPLE_LINE
+    assert printed[-3] == SUMMARY_COUNT_SAMPLE_LINE
+    assert printed[-4] == SUMMARY_TOTAL_LINE
+    # Issue #292 / #294: the average and largest lines follow it.
+    assert printed[-2] == SUMMARY_AVERAGE_SAMPLE_LINE
+    assert printed[-1] == SUMMARY_LARGEST_SAMPLE_LINE
 
 
 def test_summary_count_matches_the_records_behind_the_printed_rows(
@@ -1359,11 +1371,11 @@ def test_summary_count_matches_the_records_behind_the_printed_rows(
     """Acceptance: the count is the real number of records, not a guess."""
     assert stripe_payments.main(["summary", "--currency", "usd"]) == 0
     # Both usd payments and the refund are on the printed usd row.
-    assert capsys.readouterr().out.splitlines()[-2] == "总笔数 3"
+    assert capsys.readouterr().out.splitlines()[-3] == "总笔数 3"
 
     assert stripe_payments.main(["summary", "--top", "1"]) == 0
     # The usd row has the larger net total, so the count covers that row only.
-    assert capsys.readouterr().out.splitlines()[-2] == "总笔数 3"
+    assert capsys.readouterr().out.splitlines()[-3] == "总笔数 3"
 
 
 def test_summary_count_counts_every_record_once_across_the_groups(
@@ -1371,10 +1383,10 @@ def test_summary_count_counts_every_record_once_across_the_groups(
 ):
     """Grouping splits the records but never counts one twice."""
     assert stripe_payments.main(["summary", "--by-month"]) == 0
-    assert capsys.readouterr().out.splitlines()[-2] == "总笔数 4"
+    assert capsys.readouterr().out.splitlines()[-3] == "总笔数 4"
 
     assert stripe_payments.main(["summary", "--by-customer"]) == 0
-    assert capsys.readouterr().out.splitlines()[-2] == "总笔数 4"
+    assert capsys.readouterr().out.splitlines()[-3] == "总笔数 4"
 
 
 def test_summary_count_line_follows_the_existing_output_rules(
@@ -1429,8 +1441,9 @@ def test_cli_summary_ends_with_the_average_amount(
     assert stripe_payments.main(["summary"]) == 0
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[-1] == SUMMARY_AVERAGE_SAMPLE_LINE
-    assert printed[-2] == SUMMARY_COUNT_SAMPLE_LINE
+    assert printed[-2] == SUMMARY_AVERAGE_SAMPLE_LINE
+    assert printed[-3] == SUMMARY_COUNT_SAMPLE_LINE
+    assert printed[-1] == SUMMARY_LARGEST_SAMPLE_LINE
 
 
 def test_summary_average_is_the_total_net_divided_by_the_count(
@@ -1446,12 +1459,12 @@ def test_summary_average_is_the_total_net_divided_by_the_count(
     ):
         assert stripe_payments.main(arguments) == 0
         printed = capsys.readouterr().out.splitlines()
-        net = _printed_value(printed[-3], "净额")
-        count = _printed_count(printed[-2])
+        net = _printed_value(printed[-4], "净额")
+        count = _printed_count(printed[-3])
         expected = (net / count).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
-        assert _printed_average(printed[-1]) == expected, arguments
+        assert _printed_average(printed[-2]) == expected, arguments
 
 
 def test_summary_average_rounds_half_up(live_key, stripe_api, capsys):
@@ -1469,6 +1482,8 @@ def test_summary_average_rounds_half_up(live_key, stripe_api, capsys):
         "合计 付款 0.05 退款 0.00 净额 0.05",
         "总笔数 2",
         "平均金额 0.03",
+        # The 0.03 payment is the biggest single record.
+        "最大单笔金额 0.03",
     ]
 
 
@@ -1485,6 +1500,8 @@ def test_summary_average_keeps_a_negative_net(live_key, stripe_api, capsys):
         "合计 付款 0.02 退款 0.07 净额 -0.05",
         "总笔数 2",
         "平均金额 -0.03",
+        # Issue #294: the 0.07 refund is the biggest single record.
+        "最大单笔金额 0.07",
     ]
 
 
@@ -1505,10 +1522,124 @@ def test_summary_average_formats_zero_decimal_amounts_like_the_total(
         "合计 付款 1,001.00 退款 0.00 净额 1,001.00",
         "总笔数 2",
         "平均金额 500.50",
+        # 500 jpy and 501 jpy print as 500.00 and 501.00 in the total's unit.
+        "最大单笔金额 501.00",
     ]
 
 
 def test_summary_average_line_follows_the_existing_output_rules(
+    live_key, stripe_api, capsys
+):
+    """No rows (or `--quiet`) keeps the output exactly as before."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(),
+        "/v1/refunds": _list_payload(),
+    }
+    assert stripe_payments.main(["summary"]) == 0
+    assert capsys.readouterr().out == ""
+
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(_intent("pi_1", 123456, "usd")),
+        "/v1/refunds": _list_payload(),
+    }
+    assert stripe_payments.main(["summary", "--quiet"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["USD 1,234.56"]
+
+
+# Issue #294: after the average line the summary prints the largest single
+# payment or refund amount behind the printed rows.
+SUMMARY_LARGEST_SAMPLE_LINE = "最大单笔金额 1,234.56"
+
+
+def _printed_largest(line):
+    """The value of a ``最大单笔金额`` line, e.g. ``1,234.56``."""
+    fields = line.split()
+    assert fields[0] == stripe_payments.SUMMARY_LARGEST_LABEL
+    return Decimal(fields[1].replace(",", ""))
+
+
+def test_summary_largest_line_is_the_real_line_format():
+    """The documented sample is rendered by the real line helper."""
+    assert stripe_payments._summary_largest_line(123456) == (
+        SUMMARY_LARGEST_SAMPLE_LINE
+    )
+
+
+def test_cli_summary_ends_with_the_largest_single_amount(
+    live_key, stripe_summary_lists, capsys
+):
+    """Acceptance: one extra last line shows the largest single amount."""
+    assert stripe_payments.main(["summary"]) == 0
+
+    printed = capsys.readouterr().out.splitlines()
+    assert printed[-1] == SUMMARY_LARGEST_SAMPLE_LINE
+    # The fixture's biggest record is the 1,234.56 usd payment.
+    assert _printed_largest(printed[-1]) == Decimal("1234.56")
+    assert printed[-2] == SUMMARY_AVERAGE_SAMPLE_LINE
+
+
+def test_summary_largest_amount_is_the_biggest_record_behind_the_lines(
+    live_key, stripe_summary_lists, capsys
+):
+    """Acceptance: only the printed rows' records take part."""
+    # The plain rows cover the 1,234.56 usd payment, so it is the largest one.
+    assert stripe_payments.main(["summary"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        "最大单笔金额 1,234.56"
+    )
+
+    # The eur row holds only its 10.00 payment.
+    assert stripe_payments.main(["summary", "--currency", "eur"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "最大单笔金额 10.00"
+
+    # --top 1 keeps the usd row, the row with the largest net total.
+    assert stripe_payments.main(["summary", "--top", "1"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        "最大单笔金额 1,234.56"
+    )
+
+
+def test_summary_largest_amount_counts_a_refund_as_a_record(
+    live_key, stripe_api, capsys
+):
+    """A refund larger than every payment is the largest single amount."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(_intent("pi_1", 2, "usd")),
+        "/v1/refunds": _list_payload(_refund_record("re_1", 7, "usd")),
+    }
+
+    assert stripe_payments.main(["summary"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "USD 付款 0.02 退款 0.07 净额 -0.05",
+        "合计 付款 0.02 退款 0.07 净额 -0.05",
+        "总笔数 2",
+        "平均金额 -0.03",
+        "最大单笔金额 0.07",
+    ]
+
+
+def test_summary_largest_amount_formats_zero_decimal_amounts_like_the_total(
+    live_key, stripe_api, capsys
+):
+    """A JPY maximum prints in the same two-decimal unit as the total line."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _intent("pi_1", 500, "jpy"), _intent("pi_2", 501, "jpy")
+        ),
+        "/v1/refunds": _list_payload(),
+    }
+
+    assert stripe_payments.main(["summary"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "JPY 付款 1,001 退款 0 净额 1,001",
+        "合计 付款 1,001.00 退款 0.00 净额 1,001.00",
+        "总笔数 2",
+        "平均金额 500.50",
+        "最大单笔金额 501.00",
+    ]
+
+
+def test_summary_largest_line_follows_the_existing_output_rules(
     live_key, stripe_api, capsys
 ):
     """No rows (or `--quiet`) keeps the output exactly as before."""
@@ -1576,11 +1707,12 @@ def test_cli_summary_csv_writes_a_dated_file_next_to_the_printed_lines(
     printed = capsys.readouterr().out.splitlines()
     assert _summary_lines(printed) == SUMMARY_SAMPLE_LINES
     # Issue #243: the total line prints after the currency rows, before the
-    # file notice, so the notice stays the last printed line; Issue #290 adds
-    # Issue #290 / #292: the total, count and average lines, then the notice.
-    assert printed[-4] == SUMMARY_TOTAL_LINE
-    assert printed[-3] == SUMMARY_COUNT_SAMPLE_LINE
-    assert printed[-2] == SUMMARY_AVERAGE_SAMPLE_LINE
+    # file notice, so the notice stays the last printed line; Issues #290 /
+    # #292 / #294 print the total, count, average and largest lines first.
+    assert printed[-5] == SUMMARY_TOTAL_LINE
+    assert printed[-4] == SUMMARY_COUNT_SAMPLE_LINE
+    assert printed[-3] == SUMMARY_AVERAGE_SAMPLE_LINE
+    assert printed[-2] == SUMMARY_LARGEST_SAMPLE_LINE
     # The user sees where the file went, like `export` prints its destination.
     assert printed[-1] == (
         f"exported summary rows=2 to {_summary_csv_file(output_dir)}"
@@ -1706,6 +1838,7 @@ def test_summary_without_the_csv_option_writes_no_file(
         SUMMARY_TOTAL_LINE,
         SUMMARY_COUNT_SAMPLE_LINE,
         SUMMARY_AVERAGE_SAMPLE_LINE,
+        SUMMARY_LARGEST_SAMPLE_LINE,
     ]
     assert not output_dir.exists()
 
@@ -1799,6 +1932,8 @@ BY_MONTH_TOTAL_LINE = "合计 付款 1,754.57 退款 3.50 净额 1,751.07"
 BY_MONTH_COUNT_LINE = "总笔数 8"
 # Issue #292: 1,751.07 net over those 8 records.
 BY_MONTH_AVERAGE_LINE = "平均金额 218.88"
+# Issue #294: the biggest record is the October 1,234.56 usd payment.
+BY_MONTH_LARGEST_LINE = "最大单笔金额 1,234.56"
 
 
 @pytest.fixture
@@ -1829,6 +1964,7 @@ def _by_month_groups(printed):
         if not line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL)
         and not line.startswith(stripe_payments.SUMMARY_COUNT_LABEL)
         and not line.startswith(stripe_payments.SUMMARY_AVERAGE_LABEL)
+        and not line.startswith(stripe_payments.SUMMARY_LARGEST_LABEL)
         for fields in [line.split()]
     }
 
@@ -1867,6 +2003,7 @@ def test_cli_summary_by_month_groups_each_currency_per_month(
         BY_MONTH_TOTAL_LINE,
         BY_MONTH_COUNT_LINE,
         BY_MONTH_AVERAGE_LINE,
+        BY_MONTH_LARGEST_LINE,
     ]
 
 
@@ -1888,6 +2025,7 @@ def test_summary_by_month_values_match_each_months_records(
             line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL)
             or line.startswith(stripe_payments.SUMMARY_COUNT_LABEL)
             or line.startswith(stripe_payments.SUMMARY_AVERAGE_LABEL)
+            or line.startswith(stripe_payments.SUMMARY_LARGEST_LABEL)
         ):
             continue
         fields = line.split()
@@ -1906,12 +2044,13 @@ def test_summary_by_month_total_line_adds_up_the_printed_groups(
     assert stripe_payments.main(["summary", "--by-month"]) == 0
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[-3] == BY_MONTH_TOTAL_LINE
-    assert printed[-2] == BY_MONTH_COUNT_LINE
-    assert printed[-1] == BY_MONTH_AVERAGE_LINE
+    assert printed[-4] == BY_MONTH_TOTAL_LINE
+    assert printed[-3] == BY_MONTH_COUNT_LINE
+    assert printed[-2] == BY_MONTH_AVERAGE_LINE
+    assert printed[-1] == BY_MONTH_LARGEST_LINE
     payments, refunds, net = _printed_amounts(BY_MONTH_TOTAL_LINE)
     expected_payments = sum(
-        (amounts[0] for amounts in _by_month_groups(printed[:-3]).values()),
+        (amounts[0] for amounts in _by_month_groups(printed[:-4]).values()),
         Decimal(0),
     )
     assert payments == expected_payments
@@ -1940,6 +2079,8 @@ def test_summary_by_month_totals_every_page(live_key, stripe_api, capsys):
         # Both pages' payments, no refunds.
         "总笔数 2",
         "平均金额 15.00",
+        # The 20.00 October payment is the biggest record.
+        "最大单笔金额 20.00",
     ]
 
 
@@ -1957,6 +2098,7 @@ def test_summary_by_month_follows_the_currency_filter(
         # Three usd payments and two usd refunds behind the printed rows.
         "总笔数 5",
         "平均金额 248.61",
+        "最大单笔金额 1,234.56",
     ]
 
 
@@ -1991,9 +2133,10 @@ def test_summary_by_month_csv_adds_the_month_column(
     )
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[-4] == BY_MONTH_TOTAL_LINE
-    assert printed[-3] == BY_MONTH_COUNT_LINE
-    assert printed[-2] == BY_MONTH_AVERAGE_LINE
+    assert printed[-5] == BY_MONTH_TOTAL_LINE
+    assert printed[-4] == BY_MONTH_COUNT_LINE
+    assert printed[-3] == BY_MONTH_AVERAGE_LINE
+    assert printed[-2] == BY_MONTH_LARGEST_LINE
     assert printed[-1] == (
         f"exported summary rows=5 to {_summary_csv_file(output_dir)}"
     )
@@ -2075,6 +2218,7 @@ def test_summary_quiet_net_values_equal_the_plain_summary_nets(
             line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL)
             or line.startswith(stripe_payments.SUMMARY_COUNT_LABEL)
             or line.startswith(stripe_payments.SUMMARY_AVERAGE_LABEL)
+            or line.startswith(stripe_payments.SUMMARY_LARGEST_LABEL)
         ):
             continue
         fields = line.split()
@@ -2237,6 +2381,8 @@ def test_cli_summary_top_prints_only_the_largest_net_currencies(
         "总笔数 4",
         # Issue #292: 1,733.57 net over those 4 records.
         "平均金额 433.39",
+        # Issue #294: the 1,234.56 usd payment is the biggest record.
+        "最大单笔金额 1,234.56",
     ]
     # --top changes the printout only: the same two Stripe lists are read.
     assert [
@@ -2259,6 +2405,7 @@ def test_summary_without_top_prints_every_currency_as_before(
         # Every record of the four currencies and two refunds.
         "总笔数 6",
         "平均金额 371.93",
+        "最大单笔金额 1,234.56",
     ]
 
 
@@ -2272,6 +2419,7 @@ def test_summary_top_larger_than_the_currency_count_prints_every_currency(
         "合计 付款 2,234.57 退款 3.00 净额 2,231.57",
         "总笔数 6",
         "平均金额 371.93",
+        "最大单笔金额 1,234.56",
     ]
 
 
@@ -2287,6 +2435,7 @@ def test_summary_top_breaks_equal_net_totals_by_currency(
         # The two usd payments, the usd refund, the eur and jpy payments.
         "总笔数 5",
         "平均金额 446.71",
+        "最大单笔金额 1,234.56",
     ]
 
 
@@ -2324,6 +2473,7 @@ def test_summary_top_follows_the_currency_filter(
         "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
         "总笔数 3",
         "平均金额 411.19",
+        "最大单笔金额 1,234.56",
     ]
 
 
@@ -2340,6 +2490,7 @@ def test_summary_top_by_month_keeps_the_largest_month_currency_groups(
         # jpy payment.
         "总笔数 4",
         "平均金额 433.39",
+        "最大单笔金额 1,234.56",
     ]
 
 
@@ -2363,14 +2514,15 @@ def test_summary_top_csv_writes_only_the_selected_rows(
     )
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[:4] == [
+    assert printed[:5] == [
         TOP_SAMPLE_LINES[0],
         "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
         # The printed usd row's two payments and one refund.
         "总笔数 3",
         "平均金额 411.19",
+        "最大单笔金额 1,234.56",
     ]
-    assert printed[4].startswith("exported summary rows=1 to ")
+    assert printed[5].startswith("exported summary rows=1 to ")
     assert _summary_csv_rows(output_dir) == [
         SUMMARY_CSV_HEADER,
         ["USD", "1,234.57", "1.00", "1,233.57"],
@@ -2491,6 +2643,8 @@ DAYS_TOTAL_LINE = "合计 付款 1,244.57 退款 1.00 净额 1,243.57"
 DAYS_COUNT_LINE = "总笔数 3"
 # Issue #292: 1,243.57 net over those 3 records.
 DAYS_AVERAGE_LINE = "平均金额 414.52"
+# Issue #294: the biggest record inside the window is the 1,234.57 usd payment.
+DAYS_LARGEST_LINE = "最大单笔金额 1,234.57"
 
 
 def test_cli_summary_days_totals_only_the_last_30_days(
@@ -2505,6 +2659,7 @@ def test_cli_summary_days_totals_only_the_last_30_days(
         DAYS_TOTAL_LINE,
         DAYS_COUNT_LINE,
         DAYS_AVERAGE_LINE,
+        DAYS_LARGEST_LINE,
     ]
 
 
@@ -2537,6 +2692,8 @@ def test_summary_without_days_reads_the_whole_account_as_before(
         # All three payments and both refunds of the account.
         "总笔数 5",
         "平均金额 268.31",
+        # The 1,234.57 usd payment is the biggest record of the account.
+        "最大单笔金额 1,234.57",
     ]
     for request in stripe_days_lists.requests:
         assert "created[gte]" not in request["form"]
@@ -2557,6 +2714,7 @@ def test_summary_days_by_month_groups_only_the_window(
         # Only the records inside the window are counted.
         DAYS_COUNT_LINE,
         DAYS_AVERAGE_LINE,
+        DAYS_LARGEST_LINE,
     ]
 
 
@@ -2665,6 +2823,8 @@ BY_CUSTOMER_TOTAL_LINE = "合计 付款 1,249.57 退款 1.50 净额 1,248.07"
 BY_CUSTOMER_COUNT_LINE = "总笔数 6"
 # Issue #292: 1,248.07 net over those 6 records.
 BY_CUSTOMER_AVERAGE_LINE = "平均金额 208.01"
+# Issue #294: the biggest record is cus_alpha's 1,234.56 usd payment.
+BY_CUSTOMER_LARGEST_LINE = "最大单笔金额 1,234.56"
 
 
 def test_cli_summary_by_customer_groups_each_currency_per_customer(
@@ -2679,6 +2839,7 @@ def test_cli_summary_by_customer_groups_each_currency_per_customer(
         BY_CUSTOMER_TOTAL_LINE,
         BY_CUSTOMER_COUNT_LINE,
         BY_CUSTOMER_AVERAGE_LINE,
+        BY_CUSTOMER_LARGEST_LINE,
     ]
     # --by-customer changes the grouping only: the same two Stripe lists.
     assert [
@@ -2692,11 +2853,12 @@ def test_summary_by_customer_rows_add_up_to_the_plain_summary(
     """Acceptance: no record is dropped by the customer grouping."""
     assert stripe_payments.main(["summary", "--by-customer"]) == 0
     grouped_lines = capsys.readouterr().out.splitlines()
-    assert grouped_lines[-3] == BY_CUSTOMER_TOTAL_LINE
-    assert grouped_lines[-2] == BY_CUSTOMER_COUNT_LINE
-    assert grouped_lines[-1] == BY_CUSTOMER_AVERAGE_LINE
+    assert grouped_lines[-4] == BY_CUSTOMER_TOTAL_LINE
+    assert grouped_lines[-3] == BY_CUSTOMER_COUNT_LINE
+    assert grouped_lines[-2] == BY_CUSTOMER_AVERAGE_LINE
+    assert grouped_lines[-1] == BY_CUSTOMER_LARGEST_LINE
     grouped = {}
-    for line in grouped_lines[:-3]:
+    for line in grouped_lines[:-4]:
         fields = line.split()
         currency = fields[fields.index("付款") - 1]
         running = grouped.setdefault(currency, [Decimal(0)] * 3)
@@ -2710,6 +2872,7 @@ def test_summary_by_customer_rows_add_up_to_the_plain_summary(
         if not line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL)
         and not line.startswith(stripe_payments.SUMMARY_COUNT_LABEL)
         and not line.startswith(stripe_payments.SUMMARY_AVERAGE_LABEL)
+        and not line.startswith(stripe_payments.SUMMARY_LARGEST_LABEL)
         for fields in [line.split()]
     }
     assert {code: tuple(values) for code, values in grouped.items()} == plain
@@ -2739,6 +2902,7 @@ def test_summary_by_customer_attributes_a_refund_to_its_payments_customer(
         # The payment plus the two refunds.
         "总笔数 3",
         "平均金额 2.83",
+        "最大单笔金额 10.00",
     ]
 
 
@@ -2757,6 +2921,7 @@ def test_summary_by_customer_follows_the_currency_filter(
         # Three usd records under cus_alpha and two unattributed ones.
         "总笔数 5",
         "平均金额 247.61",
+        "最大单笔金额 1,234.56",
     ]
 
 
@@ -2791,9 +2956,10 @@ def test_summary_by_customer_csv_adds_the_customer_column(
     )
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[-4] == BY_CUSTOMER_TOTAL_LINE
-    assert printed[-3] == BY_CUSTOMER_COUNT_LINE
-    assert printed[-2] == BY_CUSTOMER_AVERAGE_LINE
+    assert printed[-5] == BY_CUSTOMER_TOTAL_LINE
+    assert printed[-4] == BY_CUSTOMER_COUNT_LINE
+    assert printed[-3] == BY_CUSTOMER_AVERAGE_LINE
+    assert printed[-2] == BY_CUSTOMER_LARGEST_LINE
     assert printed[-1] == (
         f"exported summary rows=3 to {_summary_csv_file(output_dir)}"
     )
@@ -2844,6 +3010,8 @@ def test_summary_by_customer_by_month_prefixes_customer_then_month(
         # Three payments and one refund, each counted once.
         "总笔数 4",
         "平均金额 8.50",
+        # The 20.00 October usd payment is the biggest record.
+        "最大单笔金额 20.00",
     ]
 
 
@@ -4332,6 +4500,8 @@ def test_summary_days_7_totals_only_the_last_7_days(
         "总笔数 4",
         # Issue #292: 1,243.07 net over those 4 records.
         "平均金额 310.77",
+        # Issue #294: the 1,234.57 usd payment is the biggest record.
+        "最大单笔金额 1,234.57",
     ]
 
 
@@ -4404,6 +4574,7 @@ def test_module_summary_days_7_totals_only_the_last_7_days(
         # Only the one-day-old payment and refund are in the window.
         "总笔数 2",
         "平均金额 616.79",
+        "最大单笔金额 1,234.57",
     ]
 
     assert [request["path"] for request in recorder.requests] == [
@@ -4493,6 +4664,8 @@ def test_module_summary_by_month_groups_the_totals_by_month(
         "总笔数 10",
         # Issue #292: 1,766.07 net over those 10 records.
         "平均金额 176.61",
+        # Issue #294: the 1,234.56 usd payment is the biggest record.
+        "最大单笔金额 1,234.56",
     ]
 
     # The grouping reads the whole account: the two list requests carry no
@@ -4533,6 +4706,7 @@ def test_module_summary_by_month_adds_up_to_the_plain_summary(
         "合计 付款 17.00 退款 1.00 净额 16.00",
         "总笔数 3",
         "平均金额 5.33",
+        "最大单笔金额 10.00",
     ]
     # The same records, one line per currency, when --by-month is omitted.
     assert plain.stdout.splitlines() == [
@@ -4540,6 +4714,7 @@ def test_module_summary_by_month_adds_up_to_the_plain_summary(
         "合计 付款 17.00 退款 1.00 净额 16.00",
         "总笔数 3",
         "平均金额 5.33",
+        "最大单笔金额 10.00",
     ]
 
 
