@@ -4933,4 +4933,3 @@ def test_module_summary_ends_with_the_largest_of_three_records(
     assert {
         request["authorization"] for request in recorder.requests
     } == {"Bearer sk_live_test_key"}
-
