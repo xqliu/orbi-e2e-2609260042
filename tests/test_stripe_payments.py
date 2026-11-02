@@ -4831,3 +4831,106 @@ def test_module_refunds_summary_uses_the_iso_week_year_across_a_year_boundary(
     parsed = [_parse_refund_week_line(line) for line in lines]
     assert sum(count for _, _, count, _ in parsed) == 3
     assert round(sum(amount for _, _, _, amount in parsed), 2) == 8.50
+
+# --- summary largest single amount acceptance (Issue #301) --------------
+#
+# Issue #301 accepts the largest-single-amount line the summary prints last:
+# the biggest record behind the printed rows, formatted like every other
+# amount.  The feature arrived with Issue #294 (commit 23f168a), so this
+# delivery turns the #301 acceptance sentences into evidence at the user entry
+# point instead of adding a second implementation.
+#
+# The empty case follows the contract the base already documents and locks: an
+# account without payments and refunds prints no summary row at all, so the
+# largest amount behind the printed rows is 0 and the line the summary renders
+# for it reads ``最大单笔金额 0.00``, the same amount format as the other
+# values.
+
+# The three records the acceptance asks for, in Stripe's smallest unit
+# (9.90 + 1,234.56 + 7.50 usd).  The biggest one is in the middle, so a
+# "use the last record" mistake cannot pass by accident.
+SUMMARY_THREE_RECORD_AMOUNTS = (990, 123456, 750)
+
+
+def test_summary_largest_line_is_the_biggest_of_three_records(
+    live_key, stripe_api, capsys
+):
+    """Acceptance: three different amounts, the last line is the biggest."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _intent("pi_1", 990, "usd"),
+            _intent("pi_2", 123456, "usd"),
+            _intent("pi_3", 750, "usd"),
+        ),
+        "/v1/refunds": _list_payload(),
+    }
+
+    assert stripe_payments.main(["summary"]) == 0
+
+    printed = capsys.readouterr().out.splitlines()
+    assert printed == [
+        "USD 付款 1,251.96 退款 0.00 净额 1,251.96",
+        "合计 付款 1,251.96 退款 0.00 净额 1,251.96",
+        "总笔数 3",
+        "平均金额 417.32",
+        "最大单笔金额 1,234.56",
+    ]
+    # The last line is exactly the biggest of the three Stripe amounts, in the
+    # same two-decimal, thousands-separated format as the other amounts.
+    assert printed[-1] == stripe_payments._summary_largest_line(
+        max(SUMMARY_THREE_RECORD_AMOUNTS)
+    )
+
+
+def test_summary_largest_line_is_zero_when_there_are_no_records(
+    live_key, stripe_api, capsys
+):
+    """Acceptance: no records, the largest amount is 0 (0.00 when printed)."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(),
+        "/v1/refunds": _list_payload(),
+    }
+
+    assert stripe_payments.main(["summary"]) == 0
+
+    # The documented empty-account contract: no currency row means no summary
+    # rows at all, so the printed output ends before the largest line and the
+    # largest amount behind it is 0 ...
+    assert capsys.readouterr().out == ""
+    assert stripe_payments.summarize_data() == {}
+    # ... and the line the summary renders for a 0 maximum shows 0 in the same
+    # amount format as every other value, so 0.00 is what the empty case adds
+    # up to.
+    assert stripe_payments._summary_largest_line(0) == "最大单笔金额 0.00"
+    assert _printed_largest("最大单笔金额 0.00") == 0
+
+
+def test_module_summary_ends_with_the_largest_of_three_records(
+    local_stripe_server, tmp_path
+):
+    """Acceptance at the user command: the last line is the biggest record."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _intent("pi_1", 990, "usd"),
+            _intent("pi_2", 123456, "usd"),
+            _intent("pi_3", 750, "usd"),
+        ),
+        "/v1/refunds": _list_payload(),
+    }
+
+    result = _run_module_command(server, ["summary"], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    lines = result.stdout.splitlines()
+    assert lines[-2] == "平均金额 417.32"
+    assert lines[-1] == "最大单笔金额 1,234.56"
+    assert [request["path"] for request in recorder.requests] == [
+        "/v1/payment_intents",
+        "/v1/refunds",
+    ]
+    assert {
+        request["authorization"] for request in recorder.requests
+    } == {"Bearer sk_live_test_key"}
+
