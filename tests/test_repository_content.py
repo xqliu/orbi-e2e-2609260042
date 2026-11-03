@@ -73,8 +73,12 @@ ISSUE_TEMPLATE_FRONT_MATTER_KEYS = ("name", "about")
 # Issue #120 appends this exact line as the new README final line; Issue #282
 # appends the license line after it, so it stays in the README, not at the end.
 README_REGRESSION_LINE = "Beta regression: Gemini native protocol hotfix v0.7.40."
-# Issue #282 appends this exact line as the new README final line.
-README_LAST_LINE = "本项目以 MIT 许可证发布。"
+# Issue #282 appends this exact line as the README final line; Issue #297
+# appends the contributing note after it, so it stays in the README.
+README_LICENSE_LINE = "本项目以 MIT 许可证发布。"
+# Issue #297 appends this exact line as the new README final line: a
+# contributor opens an Issue first.
+README_LAST_LINE = "想贡献请先开一个 Issue 说明你的想法，确认后再动手。"
 ISSUE_TEMPLATE_SECTIONS = (
     "## User outcome",
     "## Preconditions",
@@ -308,15 +312,19 @@ def test_readme_states_the_test_command_up_front():
     )
 
 
-def test_readme_ends_with_the_license_line():
-    """Issue #282: the README's last line states the project's MIT license."""
+def test_readme_ends_with_the_contributing_note():
+    """Issue #297: the README's last line tells contributors to open an Issue first."""
     lines = [line for line in _read(README).splitlines() if line.strip()]
     assert lines[-1] == README_LAST_LINE, (
         f"the README must end with the {README_LAST_LINE!r} line, "
         f"got {lines[-1]!r}"
     )
-    # Issue #120's regression marker stays in the README, right above the
-    # license line, so appending the license note does not drop it.
+    # Issue #282's license line stays in the README, right above the
+    # contributing note, so appending the note does not drop it; Issue #120's
+    # regression marker stays there too.
+    assert README_LICENSE_LINE in lines, (
+        f"the README must still carry the {README_LICENSE_LINE!r} line"
+    )
     assert README_REGRESSION_LINE in lines, (
         f"the README must still carry the {README_REGRESSION_LINE!r} line"
     )
