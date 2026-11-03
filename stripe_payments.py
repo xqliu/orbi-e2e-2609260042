@@ -72,7 +72,9 @@ that talks to the Stripe API with the operator's live secret key.
   also writes those same rows to ``refunds-summary-<date>.csv`` (one column
   per printed value), so the weekly refunds land in a spreadsheet; omitted,
   the command only prints, as before.  ``--output-dir`` is the directory that
-  file is written into.
+  file is written into.  After the week rows one
+  ``exported refunds-summary rows=<n> to <path>`` line names that file, so the
+  operator reads where the CSV went (Issue #304).
 * ``python -m stripe_payments --version`` prints the version number of this
   entry point (``stripe_payments <version>``) and exits 0, so a run can be
   tied to a release without reading the source.
@@ -177,6 +179,15 @@ SUMMARY_COLUMNS_BY_CUSTOMER_AND_MONTH = (
 # Issue #299: `refunds-summary --csv` writes the printed week rows, so its CSV
 # columns are exactly the values one printed line carries.
 REFUNDS_SUMMARY_COLUMNS = ("week", "currency", "count", "amount")
+
+# Issue #304: the refunds-summary CSV header names the refund columns, so the
+# first row reads `周,币种,退款笔数,退款金额` next to the printed weekly lines.
+# The other columns keep the shared labels `EXPORT_HEADERS` gives them.
+REFUNDS_SUMMARY_HEADERS = {
+    **EXPORT_HEADERS,
+    "count": "退款笔数",
+    "amount": "退款金额",
+}
 
 # Issue #285: a payment without a customer and a refund whose payment is not
 # among the read payments have no customer to group under, so they share one
@@ -922,7 +933,7 @@ def write_refunds_summary_csv(rows: Sequence[dict], *, output_dir: str) -> Path:
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"refunds-summary-{export_date()}.csv"
-    _write_csv(path, REFUNDS_SUMMARY_COLUMNS, rows)
+    _write_csv(path, REFUNDS_SUMMARY_COLUMNS, rows, REFUNDS_SUMMARY_HEADERS)
     return path
 
 
@@ -998,11 +1009,20 @@ def _customer_row(customer: "stripe.Customer") -> dict:
     }
 
 
-def _write_csv(path: Path, columns: Sequence[str], rows: Sequence[dict]) -> None:
-    """Write one CSV file: the Chinese header row (Issue #235) and the rows."""
+def _write_csv(
+    path: Path,
+    columns: Sequence[str],
+    rows: Sequence[dict],
+    headers: dict = EXPORT_HEADERS,
+) -> None:
+    """Write one CSV file: the Chinese header row (Issue #235) and the rows.
+
+    `headers` maps a column key to its Chinese label; it defaults to the
+    `export` table and the refunds-summary CSV passes its own (Issue #304).
+    """
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writerow({column: EXPORT_HEADERS[column] for column in columns})
+        writer.writerow({column: headers[column] for column in columns})
         writer.writerows(rows)
 
 
@@ -1405,8 +1425,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 rows.append(_refund_week_row(week, currency, count, amount))
             # Issue #299: the same printed rows also land in a dated CSV file;
             # the terminal output above stays exactly what it was without --csv.
+            # Issue #304: after the week rows one line says which file they went
+            # to, the same way `summary --csv` announces its file.
             if args.csv:
-                write_refunds_summary_csv(rows, output_dir=args.output_dir)
+                path = write_refunds_summary_csv(
+                    rows, output_dir=args.output_dir
+                )
+                print(
+                    f"exported refunds-summary rows={len(rows)} to {path}"
+                )
             return 0
         if args.limit < 1 or args.limit > MAX_LIMIT:
             raise ConfigurationError(
