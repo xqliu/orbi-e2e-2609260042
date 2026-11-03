@@ -39,6 +39,8 @@ SUMMARY_COUNT_SAMPLE_LINE = "总笔数 4"
 SUMMARY_AVERAGE_SAMPLE_LINE = "平均金额 310.89"
 # Issue #294: after the average line the summary prints the largest amount.
 SUMMARY_LARGEST_SAMPLE_LINE = "最大单笔金额 1,234.57"
+# Issue #296: after the largest line the summary prints the smallest amount.
+SUMMARY_SMALLEST_SAMPLE_LINE = "最小单笔金额 0.01"
 # Issue #224: the README documents the refunds-summary command and its line format.
 STRIPE_REFUNDS_SUMMARY_COMMAND = "python -m stripe_payments refunds-summary"
 REFUNDS_SUMMARY_SAMPLE_LINE = "2026-W44 usd 退款 2 笔 3.50"
@@ -498,6 +500,25 @@ def test_readme_documents_the_summary_largest_line():
     assert expected in body, (
         f"the {README_SUMMARY_HEADING!r} section must show the summary "
         f"largest line {expected!r}"
+    )
+
+
+# Issue #296: the summary closes with the smallest single amount.
+def test_readme_documents_the_summary_smallest_line():
+    body = _readme_subsection(README_SUMMARY_HEADING)
+    assert stripe_payments.SUMMARY_SMALLEST_LABEL in body, (
+        f"the {README_SUMMARY_HEADING!r} section must name the smallest line "
+        f"label {stripe_payments.SUMMARY_SMALLEST_LABEL!r}"
+    )
+    # The documented sample is rendered through the real line helper, so the
+    # docs cannot drift from what `summary` prints.
+    expected = stripe_payments._summary_smallest_line(1)
+    assert expected == SUMMARY_SMALLEST_SAMPLE_LINE, (
+        "the sample smallest line must be the real line format"
+    )
+    assert expected in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show the summary "
+        f"smallest line {expected!r}"
     )
 
 
