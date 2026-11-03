@@ -79,6 +79,13 @@
   成两位小数，所以不用再翻 CSV 找最小的一笔；与 `合计` 行一样只统计这次打印出来的
   行，`--quiet` 或没有打印行时与 `合计` 行一样不打印；原有输出内容不变，只是末尾
   多这一行。
+- `summary` 子命令新增 `--since YYYY-MM-DD` / `--until YYYY-MM-DD`：只统计
+  `created`（UTC）落在这段日期窗口内的付款和退款（`--since` 从当天 00:00:00Z 开始、
+  `--until` 到当天 23:59:59Z 结束，两端都含，如
+  `summary --since 2026-09-01 --until 2026-09-30`），窗口通过 Stripe 列表的
+  `created[gte]` / `created[lte]` 下推；与 `--by-month`、`--by-customer`、
+  `--currency`、`--quiet`、`--top`、`--csv` 组合时也只看到窗口内记录；日期非法或
+  `--since` 晚于 `--until` 时以退出码 2 结束且不调用 Stripe、不写 CSV。
 
 ### 变更
 

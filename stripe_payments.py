@@ -55,6 +55,11 @@ that talks to the Stripe API with the operator's live secret key.
   prints only the N currencies with the largest net total, largest first
   (Issue #262).  ``--days N`` reads only the payments and refunds created in
   the last N days, so a daily check can ignore older records (Issue #271).
+  ``--since YYYY-MM-DD`` / ``--until YYYY-MM-DD`` read only the records
+  whose ``created`` (UTC) falls inside that day window, each edge included,
+  through Stripe's ``created[gte]``/``created[lte]`` list filters
+  (Issue #303); a bad date or a ``--since`` later than ``--until`` exits 2
+  before any Stripe call or CSV write.
   ``--by-customer`` groups the lines by paying customer (``cus_...``) and
   currency instead, attributing a refund to the customer of the payment its
   ``payment_intent`` names (Issue #285).
@@ -431,16 +436,51 @@ def _now_timestamp() -> int:
     return int(datetime.now(timezone.utc).timestamp())
 
 
-def _created_filter(days: int | None) -> dict:
-    """The documented ``created[gte]`` filter for the last ``days`` days.
+def _day_timestamp(option: str, value: str, *, end_of_day: bool) -> int:
+    """The UTC epoch seconds of a ``YYYY-MM-DD`` window edge (Issue #303).
+
+    ``--since`` starts at 00:00:00Z and ``--until`` ends at 23:59:59Z, so
+    both edges are whole UTC days and a record created exactly on either edge
+    is inside the window.  A value that is not a real date is reported like the
+    other bad options, as a ``ConfigurationError`` naming ``option``.
+    """
+    try:
+        day = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise ConfigurationError(
+            f"{option} must be a date in YYYY-MM-DD, got {value!r}"
+        ) from None
+    if end_of_day:
+        day = day.replace(hour=23, minute=59, second=59)
+    return int(day.replace(tzinfo=timezone.utc).timestamp())
+
+
+def _created_filter(
+    days: int | None,
+    since: int | None = None,
+    until: int | None = None,
+) -> dict:
+    """The documented ``created[gte]``/``created[lte]`` list filter.
 
     Stripe includes a record whose ``created`` equals the cutoff, so "the last
-    N days" is the rolling N*24-hour window ending now.  ``None`` means "no
-    filter": the previous whole-account request is sent unchanged.
+    N days" is the rolling N*24-hour window ending now.  ``since`` and
+    ``until`` are the UTC epoch seconds of the ``--since``/``--until`` day
+    window (Issue #303): each given edge becomes the matching Stripe filter and
+    an omitted one leaves that side unfiltered.  With ``days`` too, the window
+    is the intersection of both, so the lower edge is the later start.
+    ``None`` for every argument means "no filter": the whole-account request
+    is sent unchanged.
     """
-    if days is None:
-        return {}
-    return {"created": {"gte": _now_timestamp() - days * SECONDS_PER_DAY}}
+    gte = since
+    if days is not None:
+        days_gte = _now_timestamp() - days * SECONDS_PER_DAY
+        gte = days_gte if gte is None else max(gte, days_gte)
+    created = {
+        key: value
+        for key, value in (("gte", gte), ("lte", until))
+        if value is not None
+    }
+    return {"created": created} if created else {}
 
 
 def summarize_data(
@@ -448,6 +488,8 @@ def summarize_data(
     by_month: bool = False,
     by_customer: bool = False,
     days: int | None = None,
+    since: int | None = None,
+    until: int | None = None,
 ) -> (
     dict[str, tuple[int, int, int, int, int]]
     | dict[tuple[str, ...], tuple[int, int, int, int, int]]
@@ -477,11 +519,16 @@ def summarize_data(
     (Issue #271), so only the records created in the last ``days`` days are
     totalled; omitted, the whole account is totalled as before.
 
+    With ``since``/``until`` both lists take the documented
+    ``created[gte]``/``created[lte]`` filters instead (Issue #303), so only
+    the records created inside that UTC day window are totalled; omitted, the
+    side is unfiltered and the whole account is totalled as before.
+
     Every page of the PaymentIntents and Refunds lists is read, so the totals
     cover every matching record, not only the first page.
     """
     stripe.api_key = live_secret_key()
-    filters = _created_filter(days)
+    filters = _created_filter(days, since, until)
     totals: dict[object, list[int]] = {}
     # Issue #285: the refunds carry no customer, so ``{payment id: customer}``
     # maps a refund's ``payment_intent`` to the customer of that payment.  Only
@@ -1040,6 +1087,26 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     summary.add_argument(
+        "--since",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help=(
+            "only total the payments and refunds created on or after this "
+            "UTC day, starting at 00:00:00Z (e.g. --since 2026-09-01); "
+            "omitted, no lower bound"
+        ),
+    )
+    summary.add_argument(
+        "--until",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help=(
+            "only total the payments and refunds created on or before this "
+            "UTC day, ending at 23:59:59Z (e.g. --until 2026-09-30); "
+            "omitted, no upper bound"
+        ),
+    )
+    summary.add_argument(
         "--csv",
         action="store_true",
         help=(
@@ -1169,10 +1236,29 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ConfigurationError(
                     f"--days must be positive, got {args.days}"
                 )
+            # Issue #303: parse both day edges before any Stripe call, so an
+            # invalid date or an inverted window writes nothing.
+            since = (
+                _day_timestamp("--since", args.since, end_of_day=False)
+                if args.since is not None
+                else None
+            )
+            until = (
+                _day_timestamp("--until", args.until, end_of_day=True)
+                if args.until is not None
+                else None
+            )
+            if since is not None and until is not None and since > until:
+                raise ConfigurationError(
+                    f"--since {args.since} must not be later than "
+                    f"--until {args.until}"
+                )
             totals = summarize_data(
                 by_month=args.by_month,
                 by_customer=args.by_customer,
                 days=args.days,
+                since=since,
+                until=until,
             )
             entries = []
             for key in sorted(totals):
