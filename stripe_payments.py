@@ -55,6 +55,10 @@ that talks to the Stripe API with the operator's live secret key.
   prints only the N currencies with the largest net total, largest first
   (Issue #262).  ``--days N`` reads only the payments and refunds created in
   the last N days, so a daily check can ignore older records (Issue #271).
+  ``--since 2026-10-01 --until 2026-10-31`` narrows the totals to that
+  inclusive UTC date window instead, so a calendar month reconciles in one
+  command (Issue #300); either date works alone, and a malformed or reversed
+  date fails with a message naming the option and value.
   ``--by-customer`` groups the lines by paying customer (``cus_...``) and
   currency instead, attributing a refund to the customer of the payment its
   ``payment_intent`` names (Issue #285).
@@ -208,6 +212,12 @@ SUMMARY_RECORD_LABEL = "记录"
 # rolling N*24-hour period ending now, and Stripe's documented `created[gte]`
 # list filter (inclusive) pushes it down to both lists.
 SECONDS_PER_DAY = 24 * 60 * 60
+
+# Issue #300: `summary --since/--until` narrows the totals to a UTC date
+# window.  Each option takes a `YYYY-MM-DD` date naming a whole UTC day, so
+# both named days are included: --since starts at 00:00:00 of its day and
+# --until runs through 23:59:59 of its day.
+SUMMARY_DATE_FORMAT = "YYYY-MM-DD"
 
 # Stripe keeps amounts in the smallest currency unit, but these currencies have
 # no minor unit: 500 is 500 JPY, not 5.00 JPY (docs.stripe.com/currencies,
@@ -431,6 +441,52 @@ def _now_timestamp() -> int:
     return int(datetime.now(timezone.utc).timestamp())
 
 
+def _day_start(value: str, option: str) -> int:
+    """The UTC epoch second that starts ``value`` (``YYYY-MM-DD``).
+
+    A malformed date fails with a message naming the offending option and its
+    value (Issue #300), so the operator knows which argument to repair.
+    """
+    try:
+        day = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise ConfigurationError(
+            f"{option} must be a {SUMMARY_DATE_FORMAT} date, got {value!r}"
+        ) from None
+    return int(day.replace(tzinfo=timezone.utc).timestamp())
+
+
+def _date_window(
+    since: str | None, until: str | None
+) -> tuple[int | None, int | None]:
+    """The half-open UTC window ``[start, end)`` the two dates name.
+
+    ``None`` means "no bound": the option was omitted.  Both named days are
+    included (Issue #300), so ``--until`` ends at 00:00:00 of the following
+    day and a ``--since`` day after the ``--until`` day leaves an empty,
+    reversed window that fails instead of totalling nothing.
+    """
+    start = None if since is None else _day_start(since, "--since")
+    end = (
+        None
+        if until is None
+        else _day_start(until, "--until") + SECONDS_PER_DAY
+    )
+    if start is not None and end is not None and start >= end:
+        raise ConfigurationError(
+            f"--until {until} must not be before --since {since}"
+        )
+    return start, end
+
+
+def _in_window(created: object, start: int | None, end: int | None) -> bool:
+    """Whether a record's ``created`` timestamp falls in ``[start, end)``."""
+    timestamp = int(created)
+    return (start is None or timestamp >= start) and (
+        end is None or timestamp < end
+    )
+
+
 def _created_filter(days: int | None) -> dict:
     """The documented ``created[gte]`` filter for the last ``days`` days.
 
@@ -448,6 +504,8 @@ def summarize_data(
     by_month: bool = False,
     by_customer: bool = False,
     days: int | None = None,
+    since: int | None = None,
+    until: int | None = None,
 ) -> (
     dict[str, tuple[int, int, int, int, int]]
     | dict[tuple[str, ...], tuple[int, int, int, int, int]]
@@ -477,6 +535,12 @@ def summarize_data(
     (Issue #271), so only the records created in the last ``days`` days are
     totalled; omitted, the whole account is totalled as before.
 
+    With ``since``/``until`` (epoch seconds from ``_date_window()``) the
+    records whose ``created`` timestamp falls outside the half-open
+    ``[since, until)`` range are skipped (Issue #300), so only the records
+    created inside the dated window are totalled; either bound may be
+    omitted.
+
     Every page of the PaymentIntents and Refunds lists is read, so the totals
     cover every matching record, not only the first page.
     """
@@ -491,6 +555,8 @@ def summarize_data(
     for payment in _list_all(
         stripe.PaymentIntent, limit=DEFAULT_LIMIT, params=filters
     ):
+        if not _in_window(payment.created, since, until):
+            continue
         customer = getattr(payment, "customer", None)
         if by_customer:
             payment_customers[payment.id] = customer
@@ -512,6 +578,8 @@ def summarize_data(
     for refund in _list_all(
         stripe.Refund, limit=DEFAULT_LIMIT, params=filters
     ):
+        if not _in_window(refund.created, since, until):
+            continue
         key = _summary_key(
             refund.currency,
             refund.created,
@@ -1040,6 +1108,26 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     summary.add_argument(
+        "--since",
+        default=None,
+        metavar=SUMMARY_DATE_FORMAT,
+        help=(
+            "only total the payments and refunds created on or after this "
+            "UTC date (YYYY-MM-DD, its whole day included); omitted, no "
+            "start bound"
+        ),
+    )
+    summary.add_argument(
+        "--until",
+        default=None,
+        metavar=SUMMARY_DATE_FORMAT,
+        help=(
+            "only total the payments and refunds created on or before this "
+            "UTC date (YYYY-MM-DD, its whole day included); omitted, no "
+            "end bound"
+        ),
+    )
+    summary.add_argument(
         "--csv",
         action="store_true",
         help=(
@@ -1169,10 +1257,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ConfigurationError(
                     f"--days must be positive, got {args.days}"
                 )
+            # Issue #300: a malformed or reversed date fails before any list
+            # request and before the --csv file is written.
+            since, until = _date_window(args.since, args.until)
             totals = summarize_data(
                 by_month=args.by_month,
                 by_customer=args.by_customer,
                 days=args.days,
+                since=since,
+                until=until,
             )
             entries = []
             for key in sorted(totals):
