@@ -926,6 +926,29 @@ def test_readme_shows_the_complete_refunds_summary_output():
     )
 
 
+def test_readme_documents_the_refunds_summary_csv_export():
+    """Issue #304: the section shows --csv/--output-dir, header and notice."""
+    body = _readme_subsection(README_REFUNDS_SUMMARY_HEADING)
+    for flag in ("--csv", "--output-dir"):
+        assert flag in body, (
+            f"the {README_REFUNDS_SUMMARY_HEADING!r} section must document "
+            f"the {flag} option of {STRIPE_REFUNDS_SUMMARY_COMMAND!r}"
+        )
+    # The documented CSV header and closing notice are the real ones, so the
+    # README cannot drift from what the command writes and prints.
+    assert ",".join(
+        stripe_payments.REFUNDS_SUMMARY_HEADERS[column]
+        for column in stripe_payments.REFUNDS_SUMMARY_COLUMNS
+    ) in body, (
+        f"the {README_REFUNDS_SUMMARY_HEADING!r} section must show the CSV "
+        "header row"
+    )
+    assert "exported refunds-summary rows=" in body, (
+        f"the {README_REFUNDS_SUMMARY_HEADING!r} section must show the "
+        "printed file notice of --csv"
+    )
+
+
 # Issue #257: the `test (20)` / `test (22)` base-branch checks only exist
 # because the CI `test` job runs the repository entry point once per supported
 # Node.js major version.  A missing matrix or a missing run step would leave
