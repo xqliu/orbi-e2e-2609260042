@@ -62,7 +62,11 @@ that talks to the Stripe API with the operator's live secret key.
   amount per ISO week and currency, one line per week and currency, so the
   refunds of a week can be read without filtering the exported CSV files.
   The week comes from the refund's ``created`` timestamp in UTC and is the
-  ISO 8601 week (Monday to Sunday), labelled like ``2026-W44``.
+  ISO 8601 week (Monday to Sunday), labelled like ``2026-W44``.  ``--csv``
+  also writes those same rows to ``refunds-summary-<date>.csv`` (one column
+  per printed value), so the weekly refunds land in a spreadsheet; omitted,
+  the command only prints, as before.  ``--output-dir`` is the directory that
+  file is written into.
 * ``python -m stripe_payments --version`` prints the version number of this
   entry point (``stripe_payments <version>``) and exits 0, so a run can be
   tied to a release without reading the source.
@@ -144,6 +148,8 @@ EXPORT_HEADERS = {
     "refunds": "退款",
     "net": "净额",
     "month": "月份",
+    "week": "周",
+    "count": "笔数",
 }
 
 # Issue #240: the summary CSV columns.  A row carries exactly the fields the
@@ -161,6 +167,10 @@ SUMMARY_COLUMNS_BY_CUSTOMER = ("customer",) + SUMMARY_COLUMNS
 SUMMARY_COLUMNS_BY_CUSTOMER_AND_MONTH = (
     "customer",
 ) + SUMMARY_COLUMNS_BY_MONTH
+
+# Issue #299: `refunds-summary --csv` writes the printed week rows, so its CSV
+# columns are exactly the values one printed line carries.
+REFUNDS_SUMMARY_COLUMNS = ("week", "currency", "count", "amount")
 
 # Issue #285: a payment without a customer and a refund whose payment is not
 # among the read payments have no customer to group under, so they share one
@@ -573,9 +583,25 @@ def summarize_refunds_by_week() -> dict[tuple[str, str], tuple[int, int]]:
     }
 
 
+def _refund_week_row(
+    week: str, currency: str, count: int, amount: int
+) -> dict:
+    """The refund week fields: the printed line and the CSV row share them."""
+    return {
+        "week": week,
+        "currency": currency,
+        "count": str(count),
+        "amount": _format_number(amount, currency),
+    }
+
+
 def _refund_week_line(week: str, currency: str, count: int, amount: int) -> str:
     """One refunds-summary line, e.g. ``2026-W44 usd 退款 2 笔 3.50``."""
-    return f"{week} {currency} 退款 {count} 笔 {_format_number(amount, currency)}"
+    row = _refund_week_row(week, currency, count, amount)
+    return (
+        f"{row['week']} {row['currency']} 退款 {row['count']} 笔 "
+        f"{row['amount']}"
+    )
 
 
 def _format_number(amount: int, currency: str) -> str:
@@ -808,6 +834,22 @@ def write_summary_csv(
     return path
 
 
+def write_refunds_summary_csv(rows: Sequence[dict], *, output_dir: str) -> Path:
+    """Write the weekly refund rows to ``refunds-summary-<date>.csv``.
+
+    The file lands in ``output_dir`` under a name that carries the command
+    and the UTC export date, like ``summary-<date>.csv`` does (Issue #299),
+    so two days of weekly refunds do not overwrite each other and the operator
+    sees which command wrote it.  A row carries exactly the values one printed
+    line carries, in the same (week, currency) order.
+    """
+    directory = Path(output_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"refunds-summary-{export_date()}.csv"
+    _write_csv(path, REFUNDS_SUMMARY_COLUMNS, rows)
+    return path
+
+
 def _created(value: object) -> str:
     """Format Stripe's UTC epoch seconds as ``YYYY-MM-DDTHH:MM:SSZ``."""
     return datetime.fromtimestamp(int(value), tz=timezone.utc).strftime(
@@ -1014,11 +1056,27 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
 
-    subcommands.add_parser(
+    refunds_summary = subcommands.add_parser(
         "refunds-summary",
         help=(
             "print the refund count and amount per ISO week and currency, "
             "one line per week and currency"
+        ),
+    )
+    refunds_summary.add_argument(
+        "--csv",
+        action="store_true",
+        help=(
+            "also write the printed rows to refunds-summary-<date>.csv "
+            f"(one column per printed value, in {DEFAULT_OUTPUT_DIR}/ by default)"
+        ),
+    )
+    refunds_summary.add_argument(
+        "--output-dir",
+        default=DEFAULT_OUTPUT_DIR,
+        help=(
+            "directory the --csv file is written into "
+            f"(default {DEFAULT_OUTPUT_DIR})"
         ),
     )
 
@@ -1234,9 +1292,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "refunds-summary":
             refund_totals = summarize_refunds_by_week()
+            rows = []
             for week, currency in sorted(refund_totals):
                 count, amount = refund_totals[(week, currency)]
                 print(_refund_week_line(week, currency, count, amount))
+                rows.append(_refund_week_row(week, currency, count, amount))
+            # Issue #299: the same printed rows also land in a dated CSV file;
+            # the terminal output above stays exactly what it was without --csv.
+            if args.csv:
+                write_refunds_summary_csv(rows, output_dir=args.output_dir)
             return 0
         if args.limit < 1 or args.limit > MAX_LIMIT:
             raise ConfigurationError(
