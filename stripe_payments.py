@@ -184,10 +184,15 @@ SUMMARY_AVERAGE_LABEL = "平均金额"
 # the period is visible without opening the exported CSV files.
 SUMMARY_LARGEST_LABEL = "最大单笔金额"
 
-# Issue #296: the summary closes with the smallest single payment or refund
-# amount behind the printed lines, so the smallest record of the period is
-# visible too.
+# Issue #296: after the average line the summary prints the smallest single
+# payment or refund amount behind the printed lines, so the smallest record of
+# the period is visible too.
 SUMMARY_SMALLEST_LABEL = "最小单笔金额"
+
+# Issue #298: the summary closes with one line counting the payment and refund
+# records it added up, so the number of records of the run is readable as a
+# sentence next to the totals.
+SUMMARY_RECORD_LABEL = "记录"
 
 # Issue #271: `summary --days N` reads only the last N days.  The window is a
 # rolling N*24-hour period ending now, and Stripe's documented `created[gte]`
@@ -763,6 +768,16 @@ def _summary_smallest_line(smallest: int) -> str:
     return f"{SUMMARY_SMALLEST_LABEL} {_format_hundredths(smallest)}"
 
 
+def _summary_record_line(count: int) -> str:
+    """The record-count line closing the summary, e.g. ``记录 4 条``.
+
+    ``count`` is the number of payment and refund records behind the printed
+    rows (Issue #298), the same count ``总笔数`` prints, so the last line says
+    how many records this run added up in one sentence.
+    """
+    return f"{SUMMARY_RECORD_LABEL} {count} 条"
+
+
 def write_summary_csv(
     rows: Sequence[dict],
     *,
@@ -924,8 +939,9 @@ def _parser() -> argparse.ArgumentParser:
             "print payments, refunds and net income totals per currency, "
             "one currency per line, then one total line adding them up, "
             "one line giving the record count, one line giving the average "
-            "amount, one line giving the largest single amount and one line "
-            "giving the smallest single amount"
+            "amount, one line giving the largest single amount, one line "
+            "giving the smallest single amount and one closing line "
+            "counting the records"
         ),
     )
     summary.add_argument(
@@ -1203,6 +1219,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 # Issue #296: the smallest single amount those rows cover;
                 # every printed row carries at least one record.
                 print(_summary_smallest_line(total_smallest))
+                # Issue #298: how many records this run counted, as a
+                # closing sentence.
+                print(_summary_record_line(total_count))
             if args.csv:
                 path = write_summary_csv(
                     rows,
