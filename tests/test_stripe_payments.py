@@ -2882,6 +2882,242 @@ def test_module_summary_days_fails_without_the_secret():
     assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
 
 
+# --- summary --since/--until (Issue #300) ------------------------------
+
+
+@pytest.fixture
+def stripe_window_lists(stripe_api):
+    """Records just outside, on and inside the October 2026 window."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            # The second before the window starts.
+            _by_month_intent(
+                "pi_window_1", 1000, "usd", _utc(2026, 9, 30, 23, 59, 59)
+            ),
+            # The first second of 2026-10-01: --since includes it.
+            _by_month_intent(
+                "pi_window_2", 123457, "usd", _utc(2026, 10, 1, 0, 0, 0)
+            ),
+            # The last second of 2026-10-31: --until includes it.
+            _by_month_intent(
+                "pi_window_3", 500, "eur", _utc(2026, 10, 31, 23, 59, 59)
+            ),
+            # The first second after the window ends.
+            _by_month_intent(
+                "pi_window_4", 9999, "usd", _utc(2026, 11, 1, 0, 0, 0)
+            ),
+        ),
+        "/v1/refunds": _list_payload(
+            _by_month_refund("re_window_1", 100, "usd", _utc(2026, 9, 15, 12)),
+            _by_month_refund("re_window_2", 50, "usd", _utc(2026, 10, 15, 12)),
+            _by_month_refund("re_window_3", 200, "usd", _utc(2026, 11, 2, 12)),
+        ),
+    }
+    return stripe_api
+
+
+def test_cli_summary_since_and_until_total_only_the_window(
+    live_key, stripe_window_lists, capsys
+):
+    """Acceptance: only in-window records, both named days included."""
+    exit_code = stripe_payments.main(
+        ["summary", "--since", "2026-10-01", "--until", "2026-10-31"]
+    )
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "EUR 付款 5.00 退款 0.00 净额 5.00",
+        "USD 付款 1,234.57 退款 0.50 净额 1,234.07",
+        "合计 付款 1,239.57 退款 0.50 净额 1,239.07",
+        # One 2026-10-01 payment, one 2026-10-31 payment and one 2026-10-15
+        # refund; the records just outside the window are not counted.
+        "总笔数 3",
+        "平均金额 413.02",
+        "最大单笔金额 1,234.57",
+        "最小单笔金额 0.50",
+        "记录 3 条",
+    ]
+
+
+def test_summary_since_alone_totals_everything_from_that_day_onwards(
+    live_key, stripe_window_lists, capsys
+):
+    """Acceptance: --since alone keeps the records from its day onwards."""
+    assert stripe_payments.main(["summary", "--since", "2026-10-01"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "EUR 付款 5.00 退款 0.00 净额 5.00",
+        "USD 付款 1,334.56 退款 2.50 净额 1,332.06",
+        "合计 付款 1,339.56 退款 2.50 净额 1,337.06",
+        # 2026-10-01, 2026-10-15, 2026-10-31, 2026-11-01 and 2026-11-02.
+        "总笔数 5",
+        "平均金额 267.41",
+        "最大单笔金额 1,234.57",
+        "最小单笔金额 0.50",
+        "记录 5 条",
+    ]
+
+
+def test_summary_until_alone_totals_everything_up_to_and_including_that_day(
+    live_key, stripe_window_lists, capsys
+):
+    """Acceptance: --until alone keeps the records through its whole day."""
+    assert stripe_payments.main(["summary", "--until", "2026-10-31"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "EUR 付款 5.00 退款 0.00 净额 5.00",
+        "USD 付款 1,244.57 退款 1.50 净额 1,243.07",
+        "合计 付款 1,249.57 退款 1.50 净额 1,248.07",
+        # 2026-09-15, 2026-09-30, 2026-10-01, 2026-10-15 and 2026-10-31.
+        "总笔数 5",
+        "平均金额 249.61",
+        "最大单笔金额 1,234.57",
+        "最小单笔金额 0.50",
+        "记录 5 条",
+    ]
+
+
+def test_summary_without_since_and_until_totals_the_whole_account(
+    live_key, stripe_window_lists, capsys
+):
+    """Acceptance: with neither option the command behaves exactly as today."""
+    assert stripe_payments.main(["summary"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "EUR 付款 5.00 退款 0.00 净额 5.00",
+        "USD 付款 1,344.56 退款 3.50 净额 1,341.06",
+        "合计 付款 1,349.56 退款 3.50 净额 1,346.06",
+        "总笔数 7",
+        "平均金额 192.29",
+        "最大单笔金额 1,234.57",
+        "最小单笔金额 0.50",
+        "记录 7 条",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [("--since", "2026-13-01"), ("--until", "2026-02-30")],
+)
+def test_summary_rejects_a_malformed_date_naming_the_option(
+    live_key, stripe_window_lists, export_date, tmp_path, option, value, capsys
+):
+    """Acceptance: a bad date names the option and value, writes nothing."""
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        ["summary", option, value, "--csv", "--output-dir", str(output_dir)]
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert (
+        f"error: {option} must be a YYYY-MM-DD date, got '{value}'"
+        in captured.err
+    )
+    assert captured.out == ""
+    assert not output_dir.exists()
+    assert stripe_window_lists.requests == []
+
+
+def test_summary_rejects_a_reversed_window_naming_the_dates(
+    live_key, stripe_window_lists, export_date, tmp_path, capsys
+):
+    """Acceptance: a reversed window fails, naming the option and value."""
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "summary",
+            "--since",
+            "2026-10-31",
+            "--until",
+            "2026-10-01",
+            "--csv",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert (
+        "error: --until 2026-10-01 must not be before --since 2026-10-31"
+        in captured.err
+    )
+    assert captured.out == ""
+    assert not output_dir.exists()
+    assert stripe_window_lists.requests == []
+
+
+def test_summary_since_and_until_csv_writes_only_the_window_rows(
+    live_key, stripe_window_lists, export_date, tmp_path
+):
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            [
+                "summary",
+                "--since",
+                "2026-10-01",
+                "--until",
+                "2026-10-31",
+                "--csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    assert _summary_csv_rows(output_dir) == [
+        SUMMARY_CSV_HEADER,
+        ["EUR", "5.00", "0.00", "5.00"],
+        ["USD", "1,234.57", "0.50", "1,234.07"],
+    ]
+
+
+def test_summary_help_describes_the_since_and_until_options(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["summary", "--help"])
+
+    assert excinfo.value.code == 0
+    printed = capsys.readouterr().out
+    assert "--since" in printed
+    assert "--until" in printed
+
+
+def test_module_summary_since_fails_without_the_secret():
+    """The real entry point: `python -m stripe_payments summary --since`."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != stripe_payments.LIVE_SECRET_KEY_ENV
+    }
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "stripe_payments",
+            "summary",
+            "--since",
+            "2026-10-01",
+            "--until",
+            "2026-10-31",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
+
+
 # --- summary --by-customer (Issue #285) --------------------------------
 
 
