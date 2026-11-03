@@ -3348,6 +3348,139 @@ def test_refunds_summary_help_describes_the_command(capsys):
     assert "refunds-summary" in capsys.readouterr().out
 
 
+# Issue #299: `refunds-summary --csv` writes the printed weekly refund rows
+# into a dated CSV file next to them, without changing the terminal output.
+
+REFUNDS_SUMMARY_CSV_HEADER = ["周", "币种", "笔数", "金额"]
+REFUNDS_SUMMARY_SAMPLE_LINES = [
+    "2026-W40 usd 退款 1 笔 9.00",
+    "2026-W44 eur 退款 1 笔 5.00",
+    "2026-W44 usd 退款 2 笔 3.50",
+]
+
+
+def _refunds_summary_csv_file(output_dir, date=EXPORT_DATE):
+    """The dated refunds-summary CSV, e.g. ``refunds-summary-2026-10-28.csv``."""
+    return output_dir / f"refunds-summary-{date}.csv"
+
+
+def _refunds_summary_csv_rows(output_dir, date=EXPORT_DATE):
+    return list(
+        csv.reader(
+            _refunds_summary_csv_file(output_dir, date).open(
+                newline="", encoding="utf-8"
+            )
+        )
+    )
+
+
+def test_cli_refunds_summary_csv_writes_a_dated_file_next_to_the_printed_lines(
+    live_key, stripe_refund_weeks, export_date, tmp_path, capsys
+):
+    """Issue #299 Acceptance 1: exit 0, same printed lines, one row per week."""
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        ["refunds-summary", "--csv", "--output-dir", str(output_dir)]
+    )
+
+    assert exit_code == 0
+    # The terminal behaviour does not change: the same weekly lines, no notice
+    # and nothing else.
+    assert capsys.readouterr().out.splitlines() == REFUNDS_SUMMARY_SAMPLE_LINES
+    assert sorted(path.name for path in output_dir.iterdir()) == [
+        f"refunds-summary-{EXPORT_DATE}.csv"
+    ]
+    assert _refunds_summary_csv_rows(output_dir) == [
+        REFUNDS_SUMMARY_CSV_HEADER,
+        ["2026-W40", "usd", "1", "9.00"],
+        ["2026-W44", "eur", "1", "5.00"],
+        ["2026-W44", "usd", "2", "3.50"],
+    ]
+
+
+def test_refunds_summary_csv_rows_equal_the_printed_lines(
+    live_key, stripe_api, export_date, tmp_path, capsys
+):
+    """Acceptance: the CSV rows carry the printed values, in printed order."""
+    stripe_api.list_payloads = {
+        "/v1/refunds": _list_payload(
+            _refund_on("re_1", 900, "usd", _utc(2026, 9, 28)),
+            _refund_on("re_2", 500, "jpy", _utc(2026, 10, 28)),
+            _refund_on("re_3", 250, "usd", _utc(2026, 10, 30)),
+        )
+    }
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            ["refunds-summary", "--csv", "--output-dir", str(output_dir)]
+        )
+        == 0
+    )
+
+    printed = capsys.readouterr().out.splitlines()
+    rows = _refunds_summary_csv_rows(output_dir)
+    header, data_rows = rows[0], rows[1:]
+    assert header == REFUNDS_SUMMARY_CSV_HEADER
+    assert len(data_rows) == len(printed)
+    for line, row in zip(printed, data_rows):
+        # The printed line is ``<week> <currency> 退款 <笔数> 笔 <金额>``, so
+        # every CSV cell is exactly the value the line prints.
+        fields = line.split()
+        assert fields[0] == row[0]
+        assert fields[1] == row[1]
+        assert fields[3] == row[2]
+        assert fields[5] == row[3]
+    # 500 JPY stays 500 in the CSV, like the printed zero-decimal amount.
+    assert data_rows[1] == ["2026-W44", "jpy", "1", "500"]
+
+
+def test_refunds_summary_without_the_csv_option_writes_no_file(
+    live_key, stripe_refund_weeks, tmp_path, capsys
+):
+    """Issue #299 Acceptance 2: without --csv no file is written."""
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            ["refunds-summary", "--output-dir", str(output_dir)]
+        )
+        == 0
+    )
+
+    assert capsys.readouterr().out.splitlines() == REFUNDS_SUMMARY_SAMPLE_LINES
+    assert not output_dir.exists()
+
+
+def test_cli_refunds_summary_csv_without_the_secret_creates_nothing(
+    monkeypatch, stripe_api, tmp_path, capsys
+):
+    """Failure path: the user sees the missing variable and no file appears."""
+    monkeypatch.delenv(stripe_payments.LIVE_SECRET_KEY_ENV, raising=False)
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            ["refunds-summary", "--csv", "--output-dir", str(output_dir)]
+        )
+        == 2
+    )
+
+    assert stripe_payments.LIVE_SECRET_KEY_ENV in capsys.readouterr().err
+    assert not output_dir.exists()
+
+
+def test_refunds_summary_help_describes_the_csv_option(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["refunds-summary", "--help"])
+
+    assert excinfo.value.code == 0
+    output = capsys.readouterr().out
+    assert "--csv" in output
+    assert "--output-dir" in output
+
+
 def test_module_refunds_summary_fails_without_the_secret():
     """The real user entry point: ``python -m stripe_payments refunds-summary``."""
     env = {
