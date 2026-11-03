@@ -55,11 +55,12 @@ that talks to the Stripe API with the operator's live secret key.
   prints only the N currencies with the largest net total, largest first
   (Issue #262).  ``--days N`` reads only the payments and refunds created in
   the last N days, so a daily check can ignore older records (Issue #271).
-  ``--since YYYY-MM-DD`` / ``--until YYYY-MM-DD`` read only the records
-  whose ``created`` (UTC) falls inside that day window, each edge included,
-  through Stripe's ``created[gte]``/``created[lte]`` list filters
-  (Issue #303); a bad date or a ``--since`` later than ``--until`` exits 2
-  before any Stripe call or CSV write.
+  ``--since 2026-10-01 --until 2026-10-31`` narrows the totals to that
+  inclusive UTC date window instead, so a calendar month reconciles in one
+  command (Issue #300); either date works alone, and a malformed or reversed
+  date fails with a message naming the option and value.  The window is pushed
+  down as Stripe's ``created[gte]``/``created[lte]`` list filters on both
+  lists, so only that stretch of time is read (Issue #303).
   ``--by-customer`` groups the lines by paying customer (``cus_...``) and
   currency instead, attributing a refund to the customer of the payment its
   ``payment_intent`` names (Issue #285).
@@ -213,6 +214,12 @@ SUMMARY_RECORD_LABEL = "记录"
 # rolling N*24-hour period ending now, and Stripe's documented `created[gte]`
 # list filter (inclusive) pushes it down to both lists.
 SECONDS_PER_DAY = 24 * 60 * 60
+
+# Issue #300: `summary --since/--until` narrows the totals to a UTC date
+# window.  Each option takes a `YYYY-MM-DD` date naming a whole UTC day, so
+# both named days are included: --since starts at 00:00:00 of its day and
+# --until runs through 23:59:59 of its day.
+SUMMARY_DATE_FORMAT = "YYYY-MM-DD"
 
 # Stripe keeps amounts in the smallest currency unit, but these currencies have
 # no minor unit: 500 is 500 JPY, not 5.00 JPY (docs.stripe.com/currencies,
@@ -436,23 +443,42 @@ def _now_timestamp() -> int:
     return int(datetime.now(timezone.utc).timestamp())
 
 
-def _day_timestamp(option: str, value: str, *, end_of_day: bool) -> int:
-    """The UTC epoch seconds of a ``YYYY-MM-DD`` window edge (Issue #303).
+def _day_start(value: str, option: str) -> int:
+    """The UTC epoch second that starts ``value`` (``YYYY-MM-DD``).
 
-    ``--since`` starts at 00:00:00Z and ``--until`` ends at 23:59:59Z, so
-    both edges are whole UTC days and a record created exactly on either edge
-    is inside the window.  A value that is not a real date is reported like the
-    other bad options, as a ``ConfigurationError`` naming ``option``.
+    A malformed date fails with a message naming the offending option and its
+    value (Issue #300), so the operator knows which argument to repair.
     """
     try:
         day = datetime.strptime(value, "%Y-%m-%d")
     except ValueError:
         raise ConfigurationError(
-            f"{option} must be a date in YYYY-MM-DD, got {value!r}"
+            f"{option} must be a {SUMMARY_DATE_FORMAT} date, got {value!r}"
         ) from None
-    if end_of_day:
-        day = day.replace(hour=23, minute=59, second=59)
     return int(day.replace(tzinfo=timezone.utc).timestamp())
+
+
+def _date_window(
+    since: str | None, until: str | None
+) -> tuple[int | None, int | None]:
+    """The half-open UTC window ``[start, end)`` the two dates name.
+
+    ``None`` means "no bound": the option was omitted.  Both named days are
+    included (Issue #300), so ``--until`` ends at 00:00:00 of the following
+    day and a ``--since`` day after the ``--until`` day leaves an empty,
+    reversed window that fails instead of totalling nothing.
+    """
+    start = None if since is None else _day_start(since, "--since")
+    end = (
+        None
+        if until is None
+        else _day_start(until, "--until") + SECONDS_PER_DAY
+    )
+    if start is not None and end is not None and start >= end:
+        raise ConfigurationError(
+            f"--until {until} must not be before --since {since}"
+        )
+    return start, end
 
 
 def _created_filter(
@@ -462,14 +488,15 @@ def _created_filter(
 ) -> dict:
     """The documented ``created[gte]``/``created[lte]`` list filter.
 
-    Stripe includes a record whose ``created`` equals the cutoff, so "the last
+    Stripe includes a record whose ``created`` equals either edge, so "the last
     N days" is the rolling N*24-hour window ending now.  ``since`` and
-    ``until`` are the UTC epoch seconds of the ``--since``/``--until`` day
-    window (Issue #303): each given edge becomes the matching Stripe filter and
-    an omitted one leaves that side unfiltered.  With ``days`` too, the window
-    is the intersection of both, so the lower edge is the later start.
-    ``None`` for every argument means "no filter": the whole-account request
-    is sent unchanged.
+    ``until`` are the UTC epoch seconds of the first and the last second of
+    the ``--since``/``--until`` day window (Issue #300 opened that window,
+    Issue #303 pushes it down): each given edge becomes the matching Stripe
+    filter and an omitted one leaves that side unfiltered.  With ``days`` too,
+    the window is the intersection of both, so the lower edge is the later
+    start.  ``None`` for every argument means "no filter": the whole-account
+    request is sent unchanged.
     """
     gte = since
     if days is not None:
@@ -519,10 +546,12 @@ def summarize_data(
     (Issue #271), so only the records created in the last ``days`` days are
     totalled; omitted, the whole account is totalled as before.
 
-    With ``since``/``until`` both lists take the documented
-    ``created[gte]``/``created[lte]`` filters instead (Issue #303), so only
-    the records created inside that UTC day window are totalled; omitted, the
-    side is unfiltered and the whole account is totalled as before.
+    With ``since``/``until`` (the first and the last UTC epoch second the
+    ``_date_window()`` dates name) both lists take the documented
+    ``created[gte]``/``created[lte]`` filters instead (Issue #300 opened the
+    window, Issue #303 pushes it down), so only the records created inside
+    that UTC day window are totalled; omitted, the side is unfiltered and the
+    whole account is totalled as before.
 
     Every page of the PaymentIntents and Refunds lists is read, so the totals
     cover every matching record, not only the first page.
@@ -1089,21 +1118,21 @@ def _parser() -> argparse.ArgumentParser:
     summary.add_argument(
         "--since",
         default=None,
-        metavar="YYYY-MM-DD",
+        metavar=SUMMARY_DATE_FORMAT,
         help=(
             "only total the payments and refunds created on or after this "
-            "UTC day, starting at 00:00:00Z (e.g. --since 2026-09-01); "
-            "omitted, no lower bound"
+            "UTC date (YYYY-MM-DD, its whole day included); omitted, no "
+            "start bound"
         ),
     )
     summary.add_argument(
         "--until",
         default=None,
-        metavar="YYYY-MM-DD",
+        metavar=SUMMARY_DATE_FORMAT,
         help=(
             "only total the payments and refunds created on or before this "
-            "UTC day, ending at 23:59:59Z (e.g. --until 2026-09-30); "
-            "omitted, no upper bound"
+            "UTC date (YYYY-MM-DD, its whole day included); omitted, no "
+            "end bound"
         ),
     )
     summary.add_argument(
@@ -1236,23 +1265,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ConfigurationError(
                     f"--days must be positive, got {args.days}"
                 )
-            # Issue #303: parse both day edges before any Stripe call, so an
-            # invalid date or an inverted window writes nothing.
-            since = (
-                _day_timestamp("--since", args.since, end_of_day=False)
-                if args.since is not None
-                else None
-            )
-            until = (
-                _day_timestamp("--until", args.until, end_of_day=True)
-                if args.until is not None
-                else None
-            )
-            if since is not None and until is not None and since > until:
-                raise ConfigurationError(
-                    f"--since {args.since} must not be later than "
-                    f"--until {args.until}"
-                )
+            # Issue #300: a malformed or reversed date fails before any list
+            # request and before the --csv file is written.
+            since, until_end = _date_window(args.since, args.until)
+            # Issue #303: `_date_window()` ends the window at 00:00:00 of the
+            # day after ``--until``; Stripe's ``created[lte]`` edge is
+            # inclusive, so the last second of the ``--until`` day is pushed
+            # down (23:59:59Z).
+            until = None if until_end is None else until_end - 1
             totals = summarize_data(
                 by_month=args.by_month,
                 by_customer=args.by_customer,

@@ -540,9 +540,9 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary --days 7
 `--days` 传 0 或负数时同样以退出码 2 结束并报
 `error: --days must be positive, got 0`，改成正整数（如 `--days 30`）后重跑。
 `--since` / `--until` 传的不是 `YYYY-MM-DD` 日期时以退出码 2 结束并报
-`error: --since must be a date in YYYY-MM-DD, got '2026-13-01'`；`--since` 晚于
+`error: --since must be a YYYY-MM-DD date, got '2026-13-01'`；`--since` 晚于
 `--until` 时报
-`error: --since 2026-09-30 must not be later than --until 2026-09-01`。这两种情况都
+`error: --until 2026-09-01 must not be before --since 2026-09-30`。这两种情况都
 不会调用 Stripe、也不会写 CSV，改成合法日期或正确顺序后重跑。
 缺少 `STRIPE_LIVE_SECRET_KEY` 时命令以退出码 2 结束并报
 `error: STRIPE_LIVE_SECRET_KEY is not set...`，补上环境变量后重跑；密钥失效时
