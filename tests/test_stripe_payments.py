@@ -98,14 +98,28 @@ class _StripeServer:
                 # Issue #271: Stripe's documented `created[gte]` list filter
                 # returns only records created at or after the cutoff, so the
                 # fake API applies it like the real one does.
+                # Issue #303: `created[lte]` is the inclusive upper edge, so
+                # the fake API applies it the same way.
                 created_gte = params.get("created[gte]", [None])[0]
-                if created_gte is not None and payload.get("data"):
+                created_lte = params.get("created[lte]", [None])[0]
+                if payload.get("data") and (
+                    created_gte is not None or created_lte is not None
+                ):
                     payload = {
                         **payload,
                         "data": [
                             item
                             for item in payload["data"]
-                            if int(item.get("created", 0)) >= int(created_gte)
+                            if (
+                                created_gte is None
+                                or int(item.get("created", 0))
+                                >= int(created_gte)
+                            )
+                            and (
+                                created_lte is None
+                                or int(item.get("created", 0))
+                                <= int(created_lte)
+                            )
                         ],
                     }
                 # Stripe's list responses carry the collection ``url``; the SDK
@@ -5700,3 +5714,402 @@ def test_module_summary_ends_with_the_record_count(
         "/v1/payment_intents",
         "/v1/refunds",
     ]
+
+# --- summary --since/--until (Issue #303) ------------------------------
+#
+# Issue #303 accepts a whole-day UTC window: `summary --since 2026-09-01
+# --until 2026-09-30` totals only the payments and refunds created inside
+# those days, both edges included, and pushes the window down as Stripe's
+# documented `created[gte]`/`created[lte]` list filters.  The records below
+# sit inside the window, exactly on each edge and outside it, so a leak shows
+# up in every printed line.
+
+WINDOW_SINCE = "2026-09-01"
+WINDOW_UNTIL = "2026-09-30"
+# 2026-09-01 00:00:00Z and 2026-09-30 23:59:59Z, the two Stripe filter values.
+WINDOW_START = _utc(2026, 9, 1, 0, 0, 0)
+WINDOW_END = _utc(2026, 9, 30, 23, 59, 59)
+
+
+@pytest.fixture
+def stripe_since_until_lists(stripe_api):
+    """Records inside, exactly on both edges and outside the window."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            # Inside the window.
+            _by_month_intent(
+                "pi_window_usd", 123457, "usd", _utc(2026, 9, 10, 12),
+                customer="cus_alpha",
+            ),
+            _by_month_intent(
+                "pi_window_eur", 1000, "eur", _utc(2026, 9, 15, 12),
+                customer="cus_beta",
+            ),
+            # Exactly on the lower edge: the whole day is included.
+            _by_month_intent(
+                "pi_window_start", 250, "gbp", _utc(2026, 9, 1, 0, 0, 0)
+            ),
+            # The last second before the window.
+            _by_month_intent(
+                "pi_before", 999999, "usd", _utc(2026, 8, 31, 23, 59, 59)
+            ),
+            # The first second after the window.
+            _by_month_intent(
+                "pi_after", 888888, "usd", _utc(2026, 10, 1, 0, 0, 0)
+            ),
+        ),
+        "/v1/refunds": _list_payload(
+            _by_month_refund(
+                "re_window", 100, "usd", _utc(2026, 9, 20, 12),
+                payment_intent="pi_window_usd",
+            ),
+            # Exactly on the upper edge: the whole day is included.
+            _by_month_refund(
+                "re_window_end", 25, "eur", _utc(2026, 9, 30, 23, 59, 59),
+                payment_intent="pi_window_eur",
+            ),
+            # Before the window.
+            _by_month_refund(
+                "re_before", 7777, "usd", _utc(2026, 8, 31, 23, 59, 59)
+            ),
+        ),
+    }
+    return stripe_api
+
+
+WINDOW_SAMPLE_LINES = [
+    # eur: the 10.00 payment inside the window and the 0.25 edge refund.
+    "EUR 付款 10.00 退款 0.25 净额 9.75",
+    # gbp: the 2.50 payment exactly on the lower edge.
+    "GBP 付款 2.50 退款 0.00 净额 2.50",
+    # usd: the 1,234.57 payment inside and the 1.00 refund inside.
+    "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+]
+# 1,247.07 - 1.25 = 1,245.82: the out-of-window records add nothing.
+WINDOW_TOTAL_LINE = "合计 付款 1,247.07 退款 1.25 净额 1,245.82"
+# Three payments inside (one on each edge) plus two refunds.
+WINDOW_COUNT_LINE = "总笔数 5"
+# 1,245.82 net over those 5 records.
+WINDOW_AVERAGE_LINE = "平均金额 249.16"
+# The 1,234.57 usd payment is the biggest record inside the window.
+WINDOW_LARGEST_LINE = "最大单笔金额 1,234.57"
+# The 0.25 eur refund on the upper edge is the smallest record inside.
+WINDOW_SMALLEST_LINE = "最小单笔金额 0.25"
+
+
+def test_cli_summary_since_until_totals_only_the_day_window(
+    live_key, stripe_since_until_lists, capsys
+):
+    """Acceptance: every line covers the window, both edges included."""
+    exit_code = stripe_payments.main(
+        ["summary", "--since", WINDOW_SINCE, "--until", WINDOW_UNTIL]
+    )
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines() == [
+        *WINDOW_SAMPLE_LINES,
+        WINDOW_TOTAL_LINE,
+        WINDOW_COUNT_LINE,
+        WINDOW_AVERAGE_LINE,
+        WINDOW_LARGEST_LINE,
+        WINDOW_SMALLEST_LINE,
+        "记录 5 条",
+    ]
+
+
+def test_summary_since_until_sends_both_documented_created_filters(
+    live_key, stripe_since_until_lists
+):
+    """Acceptance: both lists carry created[gte] and created[lte]."""
+    assert (
+        stripe_payments.main(
+            ["summary", "--since", WINDOW_SINCE, "--until", WINDOW_UNTIL]
+        )
+        == 0
+    )
+
+    assert [request["path"] for request in stripe_since_until_lists.requests] == [
+        "/v1/payment_intents",
+        "/v1/refunds",
+    ]
+    for request in stripe_since_until_lists.requests:
+        assert request["form"]["created[gte]"] == [str(WINDOW_START)]
+        assert request["form"]["created[lte]"] == [str(WINDOW_END)]
+
+
+@pytest.mark.parametrize(
+    "arguments, present, absent",
+    [
+        (["--since", WINDOW_SINCE], "created[gte]", "created[lte]"),
+        (["--until", WINDOW_UNTIL], "created[lte]", "created[gte]"),
+    ],
+)
+def test_summary_with_only_one_window_edge_leaves_the_other_unfiltered(
+    live_key, stripe_since_until_lists, arguments, present, absent
+):
+    """Acceptance: one edge alone filters only that side of the window."""
+    assert stripe_payments.main(["summary", *arguments]) == 0
+
+    assert len(stripe_since_until_lists.requests) == 2
+    for request in stripe_since_until_lists.requests:
+        assert present in request["form"]
+        assert absent not in request["form"]
+        assert request["form"][present] == [
+            str(WINDOW_START if present == "created[gte]" else WINDOW_END)
+        ]
+
+
+def test_summary_since_until_by_month_groups_only_the_window(
+    live_key, stripe_since_until_lists, capsys
+):
+    """Acceptance: --by-month sees the window rows only."""
+    assert (
+        stripe_payments.main(
+            [
+                "summary",
+                "--since",
+                WINDOW_SINCE,
+                "--until",
+                WINDOW_UNTIL,
+                "--by-month",
+            ]
+        )
+        == 0
+    )
+
+    assert capsys.readouterr().out.splitlines() == [
+        f"2026-09 {line}" for line in WINDOW_SAMPLE_LINES
+    ] + [
+        WINDOW_TOTAL_LINE,
+        WINDOW_COUNT_LINE,
+        WINDOW_AVERAGE_LINE,
+        WINDOW_LARGEST_LINE,
+        WINDOW_SMALLEST_LINE,
+        "记录 5 条",
+    ]
+
+
+def test_summary_since_until_csv_writes_only_the_window_rows(
+    live_key, stripe_since_until_lists, export_date, tmp_path
+):
+    """Acceptance: --csv writes exactly the printed window rows."""
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            [
+                "summary",
+                "--since",
+                WINDOW_SINCE,
+                "--until",
+                WINDOW_UNTIL,
+                "--csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    assert _summary_csv_rows(output_dir) == [
+        SUMMARY_CSV_HEADER,
+        ["EUR", "10.00", "0.25", "9.75"],
+        ["GBP", "2.50", "0.00", "2.50"],
+        ["USD", "1,234.57", "1.00", "1,233.57"],
+    ]
+
+
+@pytest.mark.parametrize(
+    "extra_arguments, expected_lines",
+    [
+        # Only the usd row survives the currency filter; its two records are
+        # the usd payment and refund inside the window.
+        (
+            ["--currency", "usd"],
+            [
+                "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+                "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
+                "总笔数 2",
+                "平均金额 616.79",
+                "最大单笔金额 1,234.57",
+                "最小单笔金额 1.00",
+                "记录 2 条",
+            ],
+        ),
+        # The usd net (1,233.57) is the largest of the window currencies.
+        (
+            ["--top", "1"],
+            [
+                "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+                "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
+                "总笔数 2",
+                "平均金额 616.79",
+                "最大单笔金额 1,234.57",
+                "最小单笔金额 1.00",
+                "记录 2 条",
+            ],
+        ),
+        (
+            ["--quiet"],
+            ["EUR 9.75", "GBP 2.50", "USD 1,233.57"],
+        ),
+        (
+            ["--by-customer"],
+            [
+                "cus_alpha USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+                "cus_beta EUR 付款 10.00 退款 0.25 净额 9.75",
+                "（未归属客户） GBP 付款 2.50 退款 0.00 净额 2.50",
+                WINDOW_TOTAL_LINE,
+                WINDOW_COUNT_LINE,
+                WINDOW_AVERAGE_LINE,
+                WINDOW_LARGEST_LINE,
+                WINDOW_SMALLEST_LINE,
+                "记录 5 条",
+            ],
+        ),
+    ],
+)
+def test_summary_since_until_keeps_the_existing_filters_on_the_window(
+    live_key, stripe_since_until_lists, capsys, extra_arguments, expected_lines
+):
+    """Acceptance: --currency/--top/--quiet/--by-customer see the window."""
+    exit_code = stripe_payments.main(
+        [
+            "summary",
+            "--since",
+            WINDOW_SINCE,
+            "--until",
+            WINDOW_UNTIL,
+            *extra_arguments,
+        ]
+    )
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines() == expected_lines
+
+
+def test_summary_days_and_since_take_the_intersection(
+    live_key, summary_days_clock, stripe_since_until_lists
+):
+    """Acceptance assumption: --days and --since keep the later lower edge."""
+    # The 30-day cutoff (2026-09-28 12:00Z) is later than 2026-09-01.
+    assert (
+        stripe_payments.main(
+            [
+                "summary",
+                "--days",
+                "30",
+                "--since",
+                WINDOW_SINCE,
+                "--until",
+                WINDOW_UNTIL,
+            ]
+        )
+        == 0
+    )
+    for request in stripe_since_until_lists.requests:
+        assert request["form"]["created[gte]"] == [str(DAYS_30_CUTOFF)]
+        assert request["form"]["created[lte]"] == [str(WINDOW_END)]
+
+    # A --since later than the --days cutoff wins the lower edge.
+    assert (
+        stripe_payments.main(
+            ["summary", "--days", "30", "--since", "2026-10-20"]
+        )
+        == 0
+    )
+    for request in stripe_since_until_lists.requests[-2:]:
+        assert request["form"]["created[gte]"] == [
+            str(_utc(2026, 10, 20, 0, 0, 0))
+        ]
+        assert "created[lte]" not in request["form"]
+
+
+@pytest.mark.parametrize(
+    "arguments, message",
+    [
+        (
+            ["--since", "2026-13-01"],
+            "--since must be a YYYY-MM-DD date, got '2026-13-01'",
+        ),
+        (
+            ["--until", "2026-02-30"],
+            "--until must be a YYYY-MM-DD date, got '2026-02-30'",
+        ),
+        (
+            ["--since", "2026-09-30", "--until", "2026-09-01"],
+            "--until 2026-09-01 must not be before --since 2026-09-30",
+        ),
+    ],
+)
+def test_summary_since_until_rejects_bad_input_before_any_stripe_call(
+    live_key, stripe_since_until_lists, export_date, tmp_path, capsys,
+    arguments, message,
+):
+    """Acceptance: bad input exits 2, calls nothing and writes no CSV."""
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "summary",
+            *arguments,
+            "--csv",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert captured.err.startswith("error: ")
+    assert message in captured.err
+    assert captured.out == ""
+    assert stripe_since_until_lists.requests == []
+    assert list(output_dir.glob("*.csv")) == []
+
+
+def test_module_summary_since_until_totals_the_window(
+    local_stripe_server, tmp_path
+):
+    """The real user entry point: ``python -m stripe_payments summary``."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _by_month_intent(
+                "pi_window", 123457, "usd", _utc(2026, 9, 10, 12)
+            ),
+            _by_month_intent(
+                "pi_before", 999999, "usd", _utc(2026, 8, 31, 23, 59, 59)
+            ),
+        ),
+        "/v1/refunds": _list_payload(
+            _by_month_refund(
+                "re_window", 100, "usd", _utc(2026, 9, 30, 23, 59, 59)
+            ),
+        ),
+    }
+
+    result = _run_module_command(
+        server,
+        ["summary", "--since", WINDOW_SINCE, "--until", WINDOW_UNTIL],
+        tmp_path,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout.splitlines() == [
+        "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+        "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
+        "总笔数 2",
+        "平均金额 616.79",
+        "最大单笔金额 1,234.57",
+        "最小单笔金额 1.00",
+        "记录 2 条",
+    ]
+    assert [request["path"] for request in recorder.requests] == [
+        "/v1/payment_intents",
+        "/v1/refunds",
+    ]
+    for request in recorder.requests:
+        assert request["form"]["created[gte]"] == [str(WINDOW_START)]
+        assert request["form"]["created[lte]"] == [str(WINDOW_END)]

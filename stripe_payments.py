@@ -58,7 +58,9 @@ that talks to the Stripe API with the operator's live secret key.
   ``--since 2026-10-01 --until 2026-10-31`` narrows the totals to that
   inclusive UTC date window instead, so a calendar month reconciles in one
   command (Issue #300); either date works alone, and a malformed or reversed
-  date fails with a message naming the option and value.
+  date fails with a message naming the option and value.  The window is pushed
+  down as Stripe's ``created[gte]``/``created[lte]`` list filters on both
+  lists, so only that stretch of time is read (Issue #303).
   ``--by-customer`` groups the lines by paying customer (``cus_...``) and
   currency instead, attributing a refund to the customer of the payment its
   ``payment_intent`` names (Issue #285).
@@ -479,24 +481,33 @@ def _date_window(
     return start, end
 
 
-def _in_window(created: object, start: int | None, end: int | None) -> bool:
-    """Whether a record's ``created`` timestamp falls in ``[start, end)``."""
-    timestamp = int(created)
-    return (start is None or timestamp >= start) and (
-        end is None or timestamp < end
-    )
+def _created_filter(
+    days: int | None,
+    since: int | None = None,
+    until: int | None = None,
+) -> dict:
+    """The documented ``created[gte]``/``created[lte]`` list filter.
 
-
-def _created_filter(days: int | None) -> dict:
-    """The documented ``created[gte]`` filter for the last ``days`` days.
-
-    Stripe includes a record whose ``created`` equals the cutoff, so "the last
-    N days" is the rolling N*24-hour window ending now.  ``None`` means "no
-    filter": the previous whole-account request is sent unchanged.
+    Stripe includes a record whose ``created`` equals either edge, so "the last
+    N days" is the rolling N*24-hour window ending now.  ``since`` and
+    ``until`` are the UTC epoch seconds of the first and the last second of
+    the ``--since``/``--until`` day window (Issue #300 opened that window,
+    Issue #303 pushes it down): each given edge becomes the matching Stripe
+    filter and an omitted one leaves that side unfiltered.  With ``days`` too,
+    the window is the intersection of both, so the lower edge is the later
+    start.  ``None`` for every argument means "no filter": the whole-account
+    request is sent unchanged.
     """
-    if days is None:
-        return {}
-    return {"created": {"gte": _now_timestamp() - days * SECONDS_PER_DAY}}
+    gte = since
+    if days is not None:
+        days_gte = _now_timestamp() - days * SECONDS_PER_DAY
+        gte = days_gte if gte is None else max(gte, days_gte)
+    created = {
+        key: value
+        for key, value in (("gte", gte), ("lte", until))
+        if value is not None
+    }
+    return {"created": created} if created else {}
 
 
 def summarize_data(
@@ -535,17 +546,18 @@ def summarize_data(
     (Issue #271), so only the records created in the last ``days`` days are
     totalled; omitted, the whole account is totalled as before.
 
-    With ``since``/``until`` (epoch seconds from ``_date_window()``) the
-    records whose ``created`` timestamp falls outside the half-open
-    ``[since, until)`` range are skipped (Issue #300), so only the records
-    created inside the dated window are totalled; either bound may be
-    omitted.
+    With ``since``/``until`` (the first and the last UTC epoch second the
+    ``_date_window()`` dates name) both lists take the documented
+    ``created[gte]``/``created[lte]`` filters instead (Issue #300 opened the
+    window, Issue #303 pushes it down), so only the records created inside
+    that UTC day window are totalled; omitted, the side is unfiltered and the
+    whole account is totalled as before.
 
     Every page of the PaymentIntents and Refunds lists is read, so the totals
     cover every matching record, not only the first page.
     """
     stripe.api_key = live_secret_key()
-    filters = _created_filter(days)
+    filters = _created_filter(days, since, until)
     totals: dict[object, list[int]] = {}
     # Issue #285: the refunds carry no customer, so ``{payment id: customer}``
     # maps a refund's ``payment_intent`` to the customer of that payment.  Only
@@ -555,8 +567,6 @@ def summarize_data(
     for payment in _list_all(
         stripe.PaymentIntent, limit=DEFAULT_LIMIT, params=filters
     ):
-        if not _in_window(payment.created, since, until):
-            continue
         customer = getattr(payment, "customer", None)
         if by_customer:
             payment_customers[payment.id] = customer
@@ -578,8 +588,6 @@ def summarize_data(
     for refund in _list_all(
         stripe.Refund, limit=DEFAULT_LIMIT, params=filters
     ):
-        if not _in_window(refund.created, since, until):
-            continue
         key = _summary_key(
             refund.currency,
             refund.created,
@@ -1259,7 +1267,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             # Issue #300: a malformed or reversed date fails before any list
             # request and before the --csv file is written.
-            since, until = _date_window(args.since, args.until)
+            since, until_end = _date_window(args.since, args.until)
+            # Issue #303: `_date_window()` ends the window at 00:00:00 of the
+            # day after ``--until``; Stripe's ``created[lte]`` edge is
+            # inclusive, so the last second of the ``--until`` day is pushed
+            # down (23:59:59Z).
+            until = None if until_end is None else until_end - 1
             totals = summarize_data(
                 by_month=args.by_month,
                 by_customer=args.by_customer,

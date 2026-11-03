@@ -660,6 +660,60 @@ def test_readme_documents_the_by_month_csv_month_column():
     )
 
 
+# Issue #303: `summary --since/--until` reads only that UTC day window.  The
+# expected lines are rendered through the real helpers below, so the documented
+# sample cannot drift from what the command prints.
+SUMMARY_WINDOW_SAMPLE_DATA = (
+    ("eur", 1000, 25),
+    ("gbp", 250, 0),
+    ("usd", 123457, 100),
+)
+
+
+def test_readme_documents_the_summary_day_window():
+    """Issue #303: the section shows --since/--until and its sample output."""
+    body = _readme_subsection(README_SUMMARY_HEADING)
+    option_strings = _subparser_option_strings("summary")
+    assert "--since" in option_strings, (
+        "the summary subparser must define --since"
+    )
+    assert "--until" in option_strings, (
+        "the summary subparser must define --until"
+    )
+    assert (
+        f"{STRIPE_SUMMARY_COMMAND} --since 2026-09-01 --until 2026-09-30"
+        in body
+    ), (
+        f"the {README_SUMMARY_HEADING!r} section must show "
+        f"{STRIPE_SUMMARY_COMMAND!r} --since 2026-09-01 --until 2026-09-30"
+    )
+    payments = sum(
+        stripe_payments._summary_hundredths(amount, currency)
+        for currency, amount, _ in SUMMARY_WINDOW_SAMPLE_DATA
+    )
+    refunds = sum(
+        stripe_payments._summary_hundredths(amount, currency)
+        for currency, _, amount in SUMMARY_WINDOW_SAMPLE_DATA
+    )
+    expected = "\n".join(
+        [
+            stripe_payments._summary_line(currency, amount, refund)
+            for currency, amount, refund in SUMMARY_WINDOW_SAMPLE_DATA
+        ]
+        + [
+            stripe_payments._summary_total_line(payments, refunds),
+            stripe_payments._summary_count_line(5),
+            stripe_payments._summary_average_line(payments - refunds, 5),
+            stripe_payments._summary_largest_line(123457),
+            stripe_payments._summary_smallest_line(25),
+        ]
+    )
+    assert expected in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show the complete "
+        f"`summary --since ... --until ...` output, expected:\n{expected}"
+    )
+
+
 # Issue #285: `summary --by-customer` groups the totals by paying customer.
 # The sample data is the README's by-customer block, rendered through the real
 # line helpers below, so the docs cannot drift from the output.

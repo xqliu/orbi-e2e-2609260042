@@ -487,6 +487,38 @@ USD 付款 1,234.57 退款 1.00 净额 1,233.57
 最小单笔金额 1.00
 ```
 
+只想看某一段日期（按 UTC 整天）的付款和退款时加 `--since` 和 `--until`：
+
+```sh
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary --since 2026-09-01 --until 2026-09-30
+```
+
+`--since` 从当天 00:00:00Z（含）开始，`--until` 到当天 23:59:59Z（含）结束，
+所以两端都是整天、边界上的记录也算在窗口内；两个参数可以只传一个，只传 `--since`
+时没有上界，只传 `--until` 时没有下界。窗口通过 Stripe 列表的 `created[gte]` /
+`created[lte]` 过滤参数下推，所以只读取这一时间段的记录。行格式与不加这两个参数时
+完全相同，币种行、`合计` 行、`总笔数` 行、`平均金额` 行、`最大单笔金额` 行和
+`最小单笔金额` 行都只覆盖窗口内的记录。例如窗口内有 usd 付款 1,234.57、usd 退款
+1.00 和 eur 付款 10.00，正好落在 2026-09-01 00:00:00Z 的 gbp 付款 2.50、正好落在
+2026-09-30 23:59:59Z 的 eur 退款 0.25 也算在窗口内，8 月 31 日和 10 月 1 日的记录
+不参与统计时，输出是：
+
+```
+EUR 付款 10.00 退款 0.25 净额 9.75
+GBP 付款 2.50 退款 0.00 净额 2.50
+USD 付款 1,234.57 退款 1.00 净额 1,233.57
+合计 付款 1,247.07 退款 1.25 净额 1,245.82
+总笔数 5
+平均金额 249.16
+最大单笔金额 1,234.57
+最小单笔金额 0.25
+```
+
+`--since` / `--until` 可以和 `--by-month`（只对窗口内的记录分月）、
+`--by-customer`、`--currency`、`--quiet`、`--top` 和 `--csv` 一起用，它们都
+只看到窗口内的记录；和 `--days` 同时传时取两者的交集（窗口起点取较晚的一个）。
+不传这两个参数时输出与上面的默认输出一致（统计整个账户）。
+
 只想看最近 7 天时把 N 传成 7：
 
 ```sh
@@ -507,6 +539,11 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary --days 7
 `error: --top must be positive, got 0`，改成正整数（如 `--top 2`）后重跑。
 `--days` 传 0 或负数时同样以退出码 2 结束并报
 `error: --days must be positive, got 0`，改成正整数（如 `--days 30`）后重跑。
+`--since` / `--until` 传的不是 `YYYY-MM-DD` 日期时以退出码 2 结束并报
+`error: --since must be a YYYY-MM-DD date, got '2026-13-01'`；`--since` 晚于
+`--until` 时报
+`error: --until 2026-09-01 must not be before --since 2026-09-30`。这两种情况都
+不会调用 Stripe、也不会写 CSV，改成合法日期或正确顺序后重跑。
 缺少 `STRIPE_LIVE_SECRET_KEY` 时命令以退出码 2 结束并报
 `error: STRIPE_LIVE_SECRET_KEY is not set...`，补上环境变量后重跑；密钥失效时
 报 Stripe 的 `HTTP 401`，轮换环境 secret 后重跑。加上 `--csv` 时，这些失败都发生在
