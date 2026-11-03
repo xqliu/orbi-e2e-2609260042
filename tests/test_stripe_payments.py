@@ -1086,8 +1086,10 @@ def test_cli_summary_prints_one_formatted_line_per_currency(
         SUMMARY_AVERAGE_SAMPLE_LINE,
         # Issue #294: the largest single amount follows the average line.
         SUMMARY_LARGEST_SAMPLE_LINE,
-        # Issue #296: the smallest single amount closes the output.
+        # Issue #296: the smallest single amount follows the largest line.
         SUMMARY_SMALLEST_SAMPLE_LINE,
+        # Issue #298: the record count closes the output.
+        "记录 4 条",
     ]
 
 
@@ -1129,6 +1131,7 @@ def test_summary_totals_every_page(live_key, stripe_api, capsys):
         "最大单笔金额 1,234.56",
         # The 0.01 usd payment is the smallest record.
         "最小单笔金额 0.01",
+        "记录 2 条",
     ]
 
 
@@ -1199,6 +1202,7 @@ def test_cli_summary_currency_prints_only_that_currency_line(
         "最大单笔金额 1,234.56",
         # The 0.01 usd payment is the smallest of the three usd records.
         "最小单笔金额 0.01",
+        "记录 3 条",
     ]
 
 
@@ -1214,6 +1218,7 @@ def test_cli_summary_currency_is_case_insensitive(
         "平均金额 411.19",
         "最大单笔金额 1,234.56",
         "最小单笔金额 0.01",
+        "记录 3 条",
     ]
 
 
@@ -1287,12 +1292,14 @@ def test_cli_summary_ends_with_the_all_currency_total_line(
     printed = capsys.readouterr().out.splitlines()
     # Issue #290: the count line follows the total line; Issue #292 adds the
     # average line after it, Issue #294 the largest-single-amount line and
-    # Issue #296 the smallest-single-amount line.
-    assert printed[-5] == "合计 付款 1,244.57 退款 1.00 净额 1,243.57"
-    assert printed[-4] == SUMMARY_COUNT_SAMPLE_LINE
-    assert printed[-3] == SUMMARY_AVERAGE_SAMPLE_LINE
-    assert printed[-2] == SUMMARY_LARGEST_SAMPLE_LINE
-    assert printed[-1] == SUMMARY_SMALLEST_SAMPLE_LINE
+    # Issue #296 the smallest-single-amount line and Issue #298 closes the
+    # output with the record-count line.
+    assert printed[-6] == "合计 付款 1,244.57 退款 1.00 净额 1,243.57"
+    assert printed[-5] == SUMMARY_COUNT_SAMPLE_LINE
+    assert printed[-4] == SUMMARY_AVERAGE_SAMPLE_LINE
+    assert printed[-3] == SUMMARY_LARGEST_SAMPLE_LINE
+    assert printed[-2] == SUMMARY_SMALLEST_SAMPLE_LINE
+    assert printed[-1] == "记录 4 条"
 
 
 def test_summary_total_equals_the_sum_of_the_printed_currency_values(
@@ -1302,7 +1309,7 @@ def test_summary_total_equals_the_sum_of_the_printed_currency_values(
     assert stripe_payments.main(["summary"]) == 0
 
     printed = capsys.readouterr().out.splitlines()
-    currency_lines, total_line = printed[:-5], printed[-5]
+    currency_lines, total_line = printed[:-6], printed[-6]
     assert total_line.split()[0] == stripe_payments.SUMMARY_TOTAL_LABEL
     for field in SUMMARY_FIELDS:
         assert _printed_value(total_line, field) == sum(
@@ -1335,6 +1342,7 @@ def test_summary_total_adds_zero_decimal_currency_values(
         "最大单笔金额 1,234.56",
         # 1,000 jpy prints as 1,000.00, so it is the smaller record here.
         "最小单笔金额 1,000.00",
+        "记录 2 条",
     ]
 
 
@@ -1355,6 +1363,7 @@ def test_summary_total_keeps_a_negative_net(live_key, stripe_api, capsys):
         "最大单笔金额 1.00",
         # The 0.50 payment is the smallest single record.
         "最小单笔金额 0.50",
+        "记录 2 条",
     ]
 
 
@@ -1371,12 +1380,14 @@ def test_cli_summary_ends_with_the_total_record_count(
 
     printed = capsys.readouterr().out.splitlines()
     # The fixture holds 3 payments and 1 refund, so 4 records were totalled.
-    assert printed[-4] == SUMMARY_COUNT_SAMPLE_LINE
-    assert printed[-5] == SUMMARY_TOTAL_LINE
-    # Issue #292 / #294 / #296: the average, largest and smallest lines follow.
-    assert printed[-3] == SUMMARY_AVERAGE_SAMPLE_LINE
-    assert printed[-2] == SUMMARY_LARGEST_SAMPLE_LINE
-    assert printed[-1] == SUMMARY_SMALLEST_SAMPLE_LINE
+    assert printed[-5] == SUMMARY_COUNT_SAMPLE_LINE
+    assert printed[-6] == SUMMARY_TOTAL_LINE
+    # Issue #292 / #294 / #296 / #298: the average, largest, smallest and
+    # record-count lines follow.
+    assert printed[-4] == SUMMARY_AVERAGE_SAMPLE_LINE
+    assert printed[-3] == SUMMARY_LARGEST_SAMPLE_LINE
+    assert printed[-2] == SUMMARY_SMALLEST_SAMPLE_LINE
+    assert printed[-1] == "记录 4 条"
 
 
 def test_summary_count_matches_the_records_behind_the_printed_rows(
@@ -1385,11 +1396,11 @@ def test_summary_count_matches_the_records_behind_the_printed_rows(
     """Acceptance: the count is the real number of records, not a guess."""
     assert stripe_payments.main(["summary", "--currency", "usd"]) == 0
     # Both usd payments and the refund are on the printed usd row.
-    assert capsys.readouterr().out.splitlines()[-4] == "总笔数 3"
+    assert capsys.readouterr().out.splitlines()[-5] == "总笔数 3"
 
     assert stripe_payments.main(["summary", "--top", "1"]) == 0
     # The usd row has the larger net total, so the count covers that row only.
-    assert capsys.readouterr().out.splitlines()[-4] == "总笔数 3"
+    assert capsys.readouterr().out.splitlines()[-5] == "总笔数 3"
 
 
 def test_summary_count_counts_every_record_once_across_the_groups(
@@ -1397,10 +1408,10 @@ def test_summary_count_counts_every_record_once_across_the_groups(
 ):
     """Grouping splits the records but never counts one twice."""
     assert stripe_payments.main(["summary", "--by-month"]) == 0
-    assert capsys.readouterr().out.splitlines()[-4] == "总笔数 4"
+    assert capsys.readouterr().out.splitlines()[-5] == "总笔数 4"
 
     assert stripe_payments.main(["summary", "--by-customer"]) == 0
-    assert capsys.readouterr().out.splitlines()[-4] == "总笔数 4"
+    assert capsys.readouterr().out.splitlines()[-5] == "总笔数 4"
 
 
 def test_summary_count_line_follows_the_existing_output_rules(
@@ -1455,10 +1466,11 @@ def test_cli_summary_ends_with_the_average_amount(
     assert stripe_payments.main(["summary"]) == 0
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[-3] == SUMMARY_AVERAGE_SAMPLE_LINE
-    assert printed[-4] == SUMMARY_COUNT_SAMPLE_LINE
-    assert printed[-2] == SUMMARY_LARGEST_SAMPLE_LINE
-    assert printed[-1] == SUMMARY_SMALLEST_SAMPLE_LINE
+    assert printed[-4] == SUMMARY_AVERAGE_SAMPLE_LINE
+    assert printed[-5] == SUMMARY_COUNT_SAMPLE_LINE
+    assert printed[-3] == SUMMARY_LARGEST_SAMPLE_LINE
+    assert printed[-2] == SUMMARY_SMALLEST_SAMPLE_LINE
+    assert printed[-1] == "记录 4 条"
 
 
 def test_summary_average_is_the_total_net_divided_by_the_count(
@@ -1474,12 +1486,12 @@ def test_summary_average_is_the_total_net_divided_by_the_count(
     ):
         assert stripe_payments.main(arguments) == 0
         printed = capsys.readouterr().out.splitlines()
-        net = _printed_value(printed[-5], "净额")
-        count = _printed_count(printed[-4])
+        net = _printed_value(printed[-6], "净额")
+        count = _printed_count(printed[-5])
         expected = (net / count).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
-        assert _printed_average(printed[-3]) == expected, arguments
+        assert _printed_average(printed[-4]) == expected, arguments
 
 
 def test_summary_average_rounds_half_up(live_key, stripe_api, capsys):
@@ -1501,6 +1513,7 @@ def test_summary_average_rounds_half_up(live_key, stripe_api, capsys):
         "最大单笔金额 0.03",
         # The 0.02 payment is the smallest single record.
         "最小单笔金额 0.02",
+        "记录 2 条",
     ]
 
 
@@ -1521,6 +1534,7 @@ def test_summary_average_keeps_a_negative_net(live_key, stripe_api, capsys):
         "最大单笔金额 0.07",
         # Issue #296: the 0.02 payment is the smallest single record.
         "最小单笔金额 0.02",
+        "记录 2 条",
     ]
 
 
@@ -1544,6 +1558,7 @@ def test_summary_average_formats_zero_decimal_amounts_like_the_total(
         # 500 jpy and 501 jpy print as 500.00 and 501.00 in the total's unit.
         "最大单笔金额 501.00",
         "最小单笔金额 500.00",
+        "记录 2 条",
     ]
 
 
@@ -1592,11 +1607,12 @@ def test_cli_summary_ends_with_the_largest_single_amount(
     assert stripe_payments.main(["summary"]) == 0
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[-2] == SUMMARY_LARGEST_SAMPLE_LINE
+    assert printed[-3] == SUMMARY_LARGEST_SAMPLE_LINE
     # The fixture's biggest record is the 1,234.56 usd payment.
-    assert _printed_largest(printed[-2]) == Decimal("1234.56")
-    assert printed[-3] == SUMMARY_AVERAGE_SAMPLE_LINE
-    assert printed[-1] == SUMMARY_SMALLEST_SAMPLE_LINE
+    assert _printed_largest(printed[-3]) == Decimal("1234.56")
+    assert printed[-4] == SUMMARY_AVERAGE_SAMPLE_LINE
+    assert printed[-2] == SUMMARY_SMALLEST_SAMPLE_LINE
+    assert printed[-1] == "记录 4 条"
 
 
 def test_summary_largest_amount_is_the_biggest_record_behind_the_lines(
@@ -1605,17 +1621,17 @@ def test_summary_largest_amount_is_the_biggest_record_behind_the_lines(
     """Acceptance: only the printed rows' records take part."""
     # The plain rows cover the 1,234.56 usd payment, so it is the largest one.
     assert stripe_payments.main(["summary"]) == 0
-    assert capsys.readouterr().out.splitlines()[-2] == (
+    assert capsys.readouterr().out.splitlines()[-3] == (
         "最大单笔金额 1,234.56"
     )
 
     # The eur row holds only its 10.00 payment.
     assert stripe_payments.main(["summary", "--currency", "eur"]) == 0
-    assert capsys.readouterr().out.splitlines()[-2] == "最大单笔金额 10.00"
+    assert capsys.readouterr().out.splitlines()[-3] == "最大单笔金额 10.00"
 
     # --top 1 keeps the usd row, the row with the largest net total.
     assert stripe_payments.main(["summary", "--top", "1"]) == 0
-    assert capsys.readouterr().out.splitlines()[-2] == (
+    assert capsys.readouterr().out.splitlines()[-3] == (
         "最大单笔金额 1,234.56"
     )
 
@@ -1638,6 +1654,7 @@ def test_summary_largest_amount_counts_a_refund_as_a_record(
         "最大单笔金额 0.07",
         # The 0.02 payment is the smallest record.
         "最小单笔金额 0.02",
+        "记录 2 条",
     ]
 
 
@@ -1660,6 +1677,7 @@ def test_summary_largest_amount_formats_zero_decimal_amounts_like_the_total(
         "平均金额 500.50",
         "最大单笔金额 501.00",
         "最小单笔金额 500.00",
+        "记录 2 条",
     ]
 
 
@@ -1733,12 +1751,14 @@ def test_cli_summary_csv_writes_a_dated_file_next_to_the_printed_lines(
     # Issue #243: the total line prints after the currency rows, before the
     # file notice, so the notice stays the last printed line; Issues #290 /
     # #292 / #294 / #296 print the total, count, average, largest and
-    # smallest lines first.
-    assert printed[-6] == SUMMARY_TOTAL_LINE
-    assert printed[-5] == SUMMARY_COUNT_SAMPLE_LINE
-    assert printed[-4] == SUMMARY_AVERAGE_SAMPLE_LINE
-    assert printed[-3] == SUMMARY_LARGEST_SAMPLE_LINE
-    assert printed[-2] == SUMMARY_SMALLEST_SAMPLE_LINE
+    # smallest lines first; Issue #298 prints the record-count line before
+    # the notice.
+    assert printed[-7] == SUMMARY_TOTAL_LINE
+    assert printed[-6] == SUMMARY_COUNT_SAMPLE_LINE
+    assert printed[-5] == SUMMARY_AVERAGE_SAMPLE_LINE
+    assert printed[-4] == SUMMARY_LARGEST_SAMPLE_LINE
+    assert printed[-3] == SUMMARY_SMALLEST_SAMPLE_LINE
+    assert printed[-2] == "记录 4 条"
     # The user sees where the file went, like `export` prints its destination.
     assert printed[-1] == (
         f"exported summary rows=2 to {_summary_csv_file(output_dir)}"
@@ -1866,6 +1886,7 @@ def test_summary_without_the_csv_option_writes_no_file(
         SUMMARY_AVERAGE_SAMPLE_LINE,
         SUMMARY_LARGEST_SAMPLE_LINE,
         SUMMARY_SMALLEST_SAMPLE_LINE,
+        "记录 4 条",
     ]
     assert not output_dir.exists()
 
@@ -1995,6 +2016,7 @@ def _by_month_groups(printed):
         and not line.startswith(stripe_payments.SUMMARY_AVERAGE_LABEL)
         and not line.startswith(stripe_payments.SUMMARY_LARGEST_LABEL)
         and not line.startswith(stripe_payments.SUMMARY_SMALLEST_LABEL)
+        and not line.startswith(stripe_payments.SUMMARY_RECORD_LABEL)
         for fields in [line.split()]
     }
 
@@ -2035,6 +2057,7 @@ def test_cli_summary_by_month_groups_each_currency_per_month(
         BY_MONTH_AVERAGE_LINE,
         BY_MONTH_LARGEST_LINE,
         BY_MONTH_SMALLEST_LINE,
+        "记录 8 条",
     ]
 
 
@@ -2058,6 +2081,7 @@ def test_summary_by_month_values_match_each_months_records(
             or line.startswith(stripe_payments.SUMMARY_AVERAGE_LABEL)
             or line.startswith(stripe_payments.SUMMARY_LARGEST_LABEL)
             or line.startswith(stripe_payments.SUMMARY_SMALLEST_LABEL)
+            or line.startswith(stripe_payments.SUMMARY_RECORD_LABEL)
         ):
             continue
         fields = line.split()
@@ -2076,14 +2100,15 @@ def test_summary_by_month_total_line_adds_up_the_printed_groups(
     assert stripe_payments.main(["summary", "--by-month"]) == 0
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[-5] == BY_MONTH_TOTAL_LINE
-    assert printed[-4] == BY_MONTH_COUNT_LINE
-    assert printed[-3] == BY_MONTH_AVERAGE_LINE
-    assert printed[-2] == BY_MONTH_LARGEST_LINE
-    assert printed[-1] == BY_MONTH_SMALLEST_LINE
+    assert printed[-6] == BY_MONTH_TOTAL_LINE
+    assert printed[-5] == BY_MONTH_COUNT_LINE
+    assert printed[-4] == BY_MONTH_AVERAGE_LINE
+    assert printed[-3] == BY_MONTH_LARGEST_LINE
+    assert printed[-2] == BY_MONTH_SMALLEST_LINE
+    assert printed[-1] == "记录 8 条"
     payments, refunds, net = _printed_amounts(BY_MONTH_TOTAL_LINE)
     expected_payments = sum(
-        (amounts[0] for amounts in _by_month_groups(printed[:-5]).values()),
+        (amounts[0] for amounts in _by_month_groups(printed[:-6]).values()),
         Decimal(0),
     )
     assert payments == expected_payments
@@ -2116,6 +2141,7 @@ def test_summary_by_month_totals_every_page(live_key, stripe_api, capsys):
         "最大单笔金额 20.00",
         # The 10.00 September payment is the smallest record.
         "最小单笔金额 10.00",
+        "记录 2 条",
     ]
 
 
@@ -2136,6 +2162,7 @@ def test_summary_by_month_follows_the_currency_filter(
         "最大单笔金额 1,234.56",
         # The 0.01 usd payment is the smallest record.
         "最小单笔金额 0.01",
+        "记录 5 条",
     ]
 
 
@@ -2170,11 +2197,12 @@ def test_summary_by_month_csv_adds_the_month_column(
     )
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[-6] == BY_MONTH_TOTAL_LINE
-    assert printed[-5] == BY_MONTH_COUNT_LINE
-    assert printed[-4] == BY_MONTH_AVERAGE_LINE
-    assert printed[-3] == BY_MONTH_LARGEST_LINE
-    assert printed[-2] == BY_MONTH_SMALLEST_LINE
+    assert printed[-7] == BY_MONTH_TOTAL_LINE
+    assert printed[-6] == BY_MONTH_COUNT_LINE
+    assert printed[-5] == BY_MONTH_AVERAGE_LINE
+    assert printed[-4] == BY_MONTH_LARGEST_LINE
+    assert printed[-3] == BY_MONTH_SMALLEST_LINE
+    assert printed[-2] == "记录 8 条"
     assert printed[-1] == (
         f"exported summary rows=5 to {_summary_csv_file(output_dir)}"
     )
@@ -2258,6 +2286,7 @@ def test_summary_quiet_net_values_equal_the_plain_summary_nets(
             or line.startswith(stripe_payments.SUMMARY_AVERAGE_LABEL)
             or line.startswith(stripe_payments.SUMMARY_LARGEST_LABEL)
             or line.startswith(stripe_payments.SUMMARY_SMALLEST_LABEL)
+            or line.startswith(stripe_payments.SUMMARY_RECORD_LABEL)
         ):
             continue
         fields = line.split()
@@ -2424,6 +2453,7 @@ def test_cli_summary_top_prints_only_the_largest_net_currencies(
         "最大单笔金额 1,234.56",
         # Issue #296: the 0.01 usd payment is the smallest record.
         "最小单笔金额 0.01",
+        "记录 4 条",
     ]
     # --top changes the printout only: the same two Stripe lists are read.
     assert [
@@ -2448,6 +2478,7 @@ def test_summary_without_top_prints_every_currency_as_before(
         "平均金额 371.93",
         "最大单笔金额 1,234.56",
         "最小单笔金额 0.01",
+        "记录 6 条",
     ]
 
 
@@ -2463,6 +2494,7 @@ def test_summary_top_larger_than_the_currency_count_prints_every_currency(
         "平均金额 371.93",
         "最大单笔金额 1,234.56",
         "最小单笔金额 0.01",
+        "记录 6 条",
     ]
 
 
@@ -2480,6 +2512,7 @@ def test_summary_top_breaks_equal_net_totals_by_currency(
         "平均金额 446.71",
         "最大单笔金额 1,234.56",
         "最小单笔金额 0.01",
+        "记录 5 条",
     ]
 
 
@@ -2519,6 +2552,7 @@ def test_summary_top_follows_the_currency_filter(
         "平均金额 411.19",
         "最大单笔金额 1,234.56",
         "最小单笔金额 0.01",
+        "记录 3 条",
     ]
 
 
@@ -2537,6 +2571,7 @@ def test_summary_top_by_month_keeps_the_largest_month_currency_groups(
         "平均金额 433.39",
         "最大单笔金额 1,234.56",
         "最小单笔金额 0.01",
+        "记录 4 条",
     ]
 
 
@@ -2560,7 +2595,7 @@ def test_summary_top_csv_writes_only_the_selected_rows(
     )
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[:6] == [
+    assert printed[:7] == [
         TOP_SAMPLE_LINES[0],
         "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
         # The printed usd row's two payments and one refund.
@@ -2568,8 +2603,10 @@ def test_summary_top_csv_writes_only_the_selected_rows(
         "平均金额 411.19",
         "最大单笔金额 1,234.56",
         "最小单笔金额 0.01",
+        # Issue #298: the record-count line closes the summary block.
+        "记录 3 条",
     ]
-    assert printed[6].startswith("exported summary rows=1 to ")
+    assert printed[7].startswith("exported summary rows=1 to ")
     assert _summary_csv_rows(output_dir) == [
         SUMMARY_CSV_HEADER,
         ["USD", "1,234.57", "1.00", "1,233.57"],
@@ -2710,6 +2747,7 @@ def test_cli_summary_days_totals_only_the_last_30_days(
         DAYS_AVERAGE_LINE,
         DAYS_LARGEST_LINE,
         DAYS_SMALLEST_LINE,
+        "记录 3 条",
     ]
 
 
@@ -2746,6 +2784,7 @@ def test_summary_without_days_reads_the_whole_account_as_before(
         "最大单笔金额 1,234.57",
         # The 1.00 usd refund is the smallest record of the account.
         "最小单笔金额 1.00",
+        "记录 5 条",
     ]
     for request in stripe_days_lists.requests:
         assert "created[gte]" not in request["form"]
@@ -2768,6 +2807,7 @@ def test_summary_days_by_month_groups_only_the_window(
         DAYS_AVERAGE_LINE,
         DAYS_LARGEST_LINE,
         DAYS_SMALLEST_LINE,
+        "记录 3 条",
     ]
 
 
@@ -2896,6 +2936,7 @@ def test_cli_summary_by_customer_groups_each_currency_per_customer(
         BY_CUSTOMER_AVERAGE_LINE,
         BY_CUSTOMER_LARGEST_LINE,
         BY_CUSTOMER_SMALLEST_LINE,
+        "记录 6 条",
     ]
     # --by-customer changes the grouping only: the same two Stripe lists.
     assert [
@@ -2909,13 +2950,14 @@ def test_summary_by_customer_rows_add_up_to_the_plain_summary(
     """Acceptance: no record is dropped by the customer grouping."""
     assert stripe_payments.main(["summary", "--by-customer"]) == 0
     grouped_lines = capsys.readouterr().out.splitlines()
-    assert grouped_lines[-5] == BY_CUSTOMER_TOTAL_LINE
-    assert grouped_lines[-4] == BY_CUSTOMER_COUNT_LINE
-    assert grouped_lines[-3] == BY_CUSTOMER_AVERAGE_LINE
-    assert grouped_lines[-2] == BY_CUSTOMER_LARGEST_LINE
-    assert grouped_lines[-1] == BY_CUSTOMER_SMALLEST_LINE
+    assert grouped_lines[-6] == BY_CUSTOMER_TOTAL_LINE
+    assert grouped_lines[-5] == BY_CUSTOMER_COUNT_LINE
+    assert grouped_lines[-4] == BY_CUSTOMER_AVERAGE_LINE
+    assert grouped_lines[-3] == BY_CUSTOMER_LARGEST_LINE
+    assert grouped_lines[-2] == BY_CUSTOMER_SMALLEST_LINE
+    assert grouped_lines[-1] == "记录 6 条"
     grouped = {}
-    for line in grouped_lines[:-5]:
+    for line in grouped_lines[:-6]:
         fields = line.split()
         currency = fields[fields.index("付款") - 1]
         running = grouped.setdefault(currency, [Decimal(0)] * 3)
@@ -2931,6 +2973,7 @@ def test_summary_by_customer_rows_add_up_to_the_plain_summary(
         and not line.startswith(stripe_payments.SUMMARY_AVERAGE_LABEL)
         and not line.startswith(stripe_payments.SUMMARY_LARGEST_LABEL)
         and not line.startswith(stripe_payments.SUMMARY_SMALLEST_LABEL)
+        and not line.startswith(stripe_payments.SUMMARY_RECORD_LABEL)
         for fields in [line.split()]
     }
     assert {code: tuple(values) for code, values in grouped.items()} == plain
@@ -2963,6 +3006,7 @@ def test_summary_by_customer_attributes_a_refund_to_its_payments_customer(
         "最大单笔金额 10.00",
         # The 0.50 refund is the smallest record.
         "最小单笔金额 0.50",
+        "记录 3 条",
     ]
 
 
@@ -2983,6 +3027,7 @@ def test_summary_by_customer_follows_the_currency_filter(
         "平均金额 247.61",
         "最大单笔金额 1,234.56",
         "最小单笔金额 0.01",
+        "记录 5 条",
     ]
 
 
@@ -3017,11 +3062,12 @@ def test_summary_by_customer_csv_adds_the_customer_column(
     )
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[-6] == BY_CUSTOMER_TOTAL_LINE
-    assert printed[-5] == BY_CUSTOMER_COUNT_LINE
-    assert printed[-4] == BY_CUSTOMER_AVERAGE_LINE
-    assert printed[-3] == BY_CUSTOMER_LARGEST_LINE
-    assert printed[-2] == BY_CUSTOMER_SMALLEST_LINE
+    assert printed[-7] == BY_CUSTOMER_TOTAL_LINE
+    assert printed[-6] == BY_CUSTOMER_COUNT_LINE
+    assert printed[-5] == BY_CUSTOMER_AVERAGE_LINE
+    assert printed[-4] == BY_CUSTOMER_LARGEST_LINE
+    assert printed[-3] == BY_CUSTOMER_SMALLEST_LINE
+    assert printed[-2] == "记录 6 条"
     assert printed[-1] == (
         f"exported summary rows=3 to {_summary_csv_file(output_dir)}"
     )
@@ -3076,6 +3122,7 @@ def test_summary_by_customer_by_month_prefixes_customer_then_month(
         "最大单笔金额 20.00",
         # The 1.00 refund is the smallest record.
         "最小单笔金额 1.00",
+        "记录 4 条",
     ]
 
 
@@ -4701,6 +4748,7 @@ def test_summary_days_7_totals_only_the_last_7_days(
         "最大单笔金额 1,234.57",
         # Issue #296: the 0.50 usd refund is the smallest record.
         "最小单笔金额 0.50",
+        "记录 4 条",
     ]
 
 
@@ -4776,6 +4824,7 @@ def test_module_summary_days_7_totals_only_the_last_7_days(
         "最大单笔金额 1,234.57",
         # The 1.00 refund is the smallest record in the window.
         "最小单笔金额 1.00",
+        "记录 2 条",
     ]
 
     assert [request["path"] for request in recorder.requests] == [
@@ -4869,6 +4918,7 @@ def test_module_summary_by_month_groups_the_totals_by_month(
         "最大单笔金额 1,234.56",
         # Issue #296: the 0.01 usd payment is the smallest record.
         "最小单笔金额 0.01",
+        "记录 10 条",
     ]
 
     # The grouping reads the whole account: the two list requests carry no
@@ -4911,6 +4961,7 @@ def test_module_summary_by_month_adds_up_to_the_plain_summary(
         "平均金额 5.33",
         "最大单笔金额 10.00",
         "最小单笔金额 1.00",
+        "记录 3 条",
     ]
     # The same records, one line per currency, when --by-month is omitted.
     assert plain.stdout.splitlines() == [
@@ -4920,6 +4971,7 @@ def test_module_summary_by_month_adds_up_to_the_plain_summary(
         "平均金额 5.33",
         "最大单笔金额 10.00",
         "最小单笔金额 1.00",
+        "记录 3 条",
     ]
 
 
@@ -5081,10 +5133,11 @@ def test_summary_largest_line_is_the_biggest_of_three_records(
         "最大单笔金额 1,234.56",
         # The 7.50 payment is the smallest of the three records.
         "最小单笔金额 7.50",
+        "记录 3 条",
     ]
     # The largest line is exactly the biggest of the three Stripe amounts, in
     # the same two-decimal, thousands-separated format as the other amounts.
-    assert printed[-2] == stripe_payments._summary_largest_line(
+    assert printed[-3] == stripe_payments._summary_largest_line(
         max(SUMMARY_THREE_RECORD_AMOUNTS)
     )
 
@@ -5131,9 +5184,10 @@ def test_module_summary_ends_with_the_largest_of_three_records(
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
     lines = result.stdout.splitlines()
-    assert lines[-3] == "平均金额 417.32"
-    assert lines[-2] == "最大单笔金额 1,234.56"
-    assert lines[-1] == "最小单笔金额 7.50"
+    assert lines[-4] == "平均金额 417.32"
+    assert lines[-3] == "最大单笔金额 1,234.56"
+    assert lines[-2] == "最小单笔金额 7.50"
+    assert lines[-1] == "记录 3 条"
     assert [request["path"] for request in recorder.requests] == [
         "/v1/payment_intents",
         "/v1/refunds",
@@ -5174,10 +5228,11 @@ def test_cli_summary_ends_with_the_smallest_single_amount(
     assert stripe_payments.main(["summary"]) == 0
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[-1] == SUMMARY_SMALLEST_SAMPLE_LINE
+    assert printed[-2] == SUMMARY_SMALLEST_SAMPLE_LINE
     # The fixture's smallest record is the 0.01 usd payment.
-    assert _printed_smallest(printed[-1]) == Decimal("0.01")
-    assert printed[-2] == SUMMARY_LARGEST_SAMPLE_LINE
+    assert _printed_smallest(printed[-2]) == Decimal("0.01")
+    assert printed[-3] == SUMMARY_LARGEST_SAMPLE_LINE
+    assert printed[-1] == "记录 4 条"
 
 
 def test_summary_smallest_amount_is_the_smallest_record_behind_the_lines(
@@ -5186,11 +5241,11 @@ def test_summary_smallest_amount_is_the_smallest_record_behind_the_lines(
     """Acceptance: only the printed rows' records take part."""
     # The eur row holds only its 10.00 payment.
     assert stripe_payments.main(["summary", "--currency", "eur"]) == 0
-    assert capsys.readouterr().out.splitlines()[-1] == "最小单笔金额 10.00"
+    assert capsys.readouterr().out.splitlines()[-2] == "最小单笔金额 10.00"
 
     # --top 1 keeps the usd row, whose smallest record is the 0.01 payment.
     assert stripe_payments.main(["summary", "--top", "1"]) == 0
-    assert capsys.readouterr().out.splitlines()[-1] == (
+    assert capsys.readouterr().out.splitlines()[-2] == (
         "最小单笔金额 0.01"
     )
 
@@ -5212,6 +5267,7 @@ def test_summary_smallest_amount_counts_a_refund_as_a_record(
         "平均金额 3.49",
         "最大单笔金额 7.00",
         "最小单笔金额 0.02",
+        "记录 2 条",
     ]
 
 
@@ -5234,6 +5290,7 @@ def test_summary_smallest_amount_formats_zero_decimal_amounts_like_the_total(
         "平均金额 500.50",
         "最大单笔金额 501.00",
         "最小单笔金额 500.00",
+        "记录 2 条",
     ]
 
 
@@ -5278,9 +5335,10 @@ def test_module_summary_ends_with_the_smallest_of_three_records(
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
     lines = result.stdout.splitlines()
-    assert lines[-3] == "平均金额 417.32"
-    assert lines[-2] == "最大单笔金额 1,234.56"
-    assert lines[-1] == "最小单笔金额 7.50"
+    assert lines[-4] == "平均金额 417.32"
+    assert lines[-3] == "最大单笔金额 1,234.56"
+    assert lines[-2] == "最小单笔金额 7.50"
+    assert lines[-1] == "记录 3 条"
     assert [request["path"] for request in recorder.requests] == [
         "/v1/payment_intents",
         "/v1/refunds",
@@ -5288,3 +5346,121 @@ def test_module_summary_ends_with_the_smallest_of_three_records(
     assert {
         request["authorization"] for request in recorder.requests
     } == {"Bearer sk_live_test_key"}
+
+
+# --- summary record count closing line (Issue #298) ----------------------
+#
+# Issue #298 accepts one more closing line: the number of payment and refund
+# records this summary counted, printed after the smallest-single-amount line
+# as ``记录 <N> 条``.  N is the payments (PaymentIntent) count plus the refunds
+# (Refund) count behind the printed rows, the same number ``总笔数`` prints.
+
+SUMMARY_RECORD_SAMPLE_LINE = "记录 4 条"
+
+
+def _printed_record_count(line):
+    """The value of a ``记录`` line, e.g. ``4``."""
+    fields = line.split()
+    assert fields[0] == stripe_payments.SUMMARY_RECORD_LABEL
+    assert fields[2] == "条"
+    return int(fields[1])
+
+
+def test_summary_record_line_is_the_real_line_format():
+    """The documented sample is rendered by the real line helper."""
+    assert stripe_payments._summary_record_line(4) == (
+        SUMMARY_RECORD_SAMPLE_LINE
+    )
+
+
+def test_cli_summary_ends_with_the_record_count_line(
+    live_key, stripe_summary_lists, capsys
+):
+    """Acceptance: the last line is ``记录 4 条`` (3 payments + 1 refund)."""
+    assert stripe_payments.main(["summary"]) == 0
+
+    printed = capsys.readouterr().out.splitlines()
+    assert printed[-1] == SUMMARY_RECORD_SAMPLE_LINE
+    assert _printed_record_count(printed[-1]) == 4
+    # Issue #296: the smallest-single-amount line stays directly above it.
+    assert printed[-2] == SUMMARY_SMALLEST_SAMPLE_LINE
+
+
+def test_summary_record_count_is_the_payments_plus_the_refunds(
+    live_key, stripe_api, capsys
+):
+    """Acceptance: a refund is one record, like a payment."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _intent("pi_1", 700, "usd"), _intent("pi_2", 900, "usd")
+        ),
+        "/v1/refunds": _list_payload(_refund_record("re_1", 200, "usd")),
+    }
+
+    assert stripe_payments.main(["summary"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "记录 3 条"
+
+
+def test_summary_record_count_follows_the_printed_rows(
+    live_key, stripe_top_lists, capsys
+):
+    """Acceptance: only the printed rows' records are counted."""
+    # The plain summary prints every currency, so every record is counted.
+    assert stripe_payments.main(["summary"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "记录 6 条"
+
+    # --top 2 prints the usd and eur rows: two usd payments, the usd refund
+    # and the eur payment.
+    assert stripe_payments.main(["summary", "--top", "2"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "记录 4 条"
+
+    # Only the eur payment is behind the printed eur row.
+    assert stripe_payments.main(["summary", "--currency", "eur"]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "记录 1 条"
+
+
+def test_summary_record_line_follows_the_existing_output_rules(
+    live_key, stripe_api, capsys
+):
+    """No rows (or `--quiet`) keeps the output exactly as before."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(),
+        "/v1/refunds": _list_payload(),
+    }
+    # Acceptance: an empty account prints nothing, not `记录 0 条`.
+    assert stripe_payments.main(["summary"]) == 0
+    assert capsys.readouterr().out == ""
+
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(_intent("pi_1", 123456, "usd")),
+        "/v1/refunds": _list_payload(),
+    }
+    assert stripe_payments.main(["summary", "--quiet"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["USD 1,234.56"]
+
+
+def test_module_summary_ends_with_the_record_count(
+    local_stripe_server, tmp_path
+):
+    """Acceptance at the user command: ``python -m stripe_payments summary``."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _intent("pi_1", 990, "usd"),
+            _intent("pi_2", 123456, "usd"),
+        ),
+        "/v1/refunds": _list_payload(_refund_record("re_1", 100, "usd")),
+    }
+
+    result = _run_module_command(server, ["summary"], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    lines = result.stdout.splitlines()
+    # Two usd payments plus one usd refund, counted once each.
+    assert lines[-1] == "记录 3 条"
+    assert lines[-2] == "最小单笔金额 1.00"
+    assert [request["path"] for request in recorder.requests] == [
+        "/v1/payment_intents",
+        "/v1/refunds",
+    ]
