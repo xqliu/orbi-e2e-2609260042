@@ -104,6 +104,14 @@
 - `export` 导出的 `payments-<日期>.csv` 新增 `客户邮箱` 列：值取自付款所属
   Customer 的邮箱，对账时直接看到是谁付的；付款没有 customer、Customer 没有
   邮箱时该格为空。JSON 的 payments 行相应多出 `customer_email` 键。
+- `summary` 子命令只统计 Stripe 状态为 `succeeded` 的付款和退款：PaymentIntent
+  与 Refund 中其他状态的记录（如 `requires_payment_method`、`requires_capture`、
+  `processing`、`pending`、`failed`、`canceled`）不再计入付款、退款、净额、
+  `合计`、`总笔数`、`平均金额`、`最大单笔金额`、`最小单笔金额`、`记录 N 条`
+  和 `--csv` 的每一格，所以汇总数字与 Stripe 里真正收到的钱一致；每一页记录都
+  会被筛选，`--by-month`、`--by-customer`、`--quiet`、`--top`、`--currency`、
+  `--days`、`--since/--until`、`--csv` 的任意组合都遵循同一规则；
+  `refunds-summary` 的统计范围不变。
 
 ## [v0.6.106] - 2026-09-28
 

@@ -602,6 +602,12 @@ def summarize_data(
     """Return ``{currency: (payments_total, refunds_total, count, largest,
     smallest)}``.
 
+    Only records Stripe reports as ``succeeded`` are totalled (Issue #318):
+    a payment with another ``status`` (for example ``requires_capture``,
+    ``processing`` or ``canceled``) and a refund with another ``status``
+    (for example ``pending``, ``failed`` or ``canceled``) are dropped, so every
+    value printed here is money Stripe actually took or paid back.
+
     ``count`` is the number of payment and refund records behind the totals
     (Issue #290), so the summary prints how many records it added up,
     ``largest`` is the biggest single record amount among them in
@@ -645,6 +651,12 @@ def summarize_data(
     for payment in _list_all(
         stripe.PaymentIntent, limit=DEFAULT_LIMIT, params=filters
     ):
+        # Issue #318: only money Stripe actually took counts, so a payment
+        # that is not succeeded (requires_payment_method, requires_capture,
+        # processing, canceled, ...) is dropped before it reaches any total,
+        # count, extreme or CSV row.
+        if payment.status != "succeeded":
+            continue
         customer = getattr(payment, "customer", None)
         if by_customer:
             payment_customers[payment.id] = customer
@@ -666,6 +678,11 @@ def summarize_data(
     for refund in _list_all(
         stripe.Refund, limit=DEFAULT_LIMIT, params=filters
     ):
+        # Issue #318: a refund that is not succeeded (pending, failed,
+        # canceled, ...) never paid money back, so it takes part in no total,
+        # count, extreme or CSV row either.
+        if refund.status != "succeeded":
+            continue
         key = _summary_key(
             refund.currency,
             refund.created,
