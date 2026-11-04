@@ -1088,6 +1088,7 @@ def test_cli_summary_prints_one_formatted_line_per_currency(
 
     assert exit_code == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         # One line per currency, sorted by currency code; thousands separators
         # and an upper-case currency code.
         "EUR 付款 10.00 退款 0.00 净额 10.00",
@@ -1136,6 +1137,7 @@ def test_summary_totals_every_page(live_key, stripe_api, capsys):
 
     assert stripe_payments.main(["summary"]) == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         "USD 付款 1,234.57 退款 0.00 净额 1,234.57",
         "合计 付款 1,234.57 退款 0.00 净额 1,234.57",
         # Both pages' payments, no refunds.
@@ -1149,7 +1151,7 @@ def test_summary_totals_every_page(live_key, stripe_api, capsys):
     ]
 
 
-def test_summary_prints_nothing_when_the_account_has_no_records(
+def test_summary_prints_only_the_range_line_when_the_account_has_no_records(
     live_key, stripe_api, capsys
 ):
     stripe_api.list_payloads = {
@@ -1157,9 +1159,10 @@ def test_summary_prints_nothing_when_the_account_has_no_records(
         "/v1/refunds": _list_payload(),
     }
 
-    # No printed currency line means no total line either.
+    # With no record there is no currency line and no footer, so the range
+    # line saying so is the whole output (Issue #321).
     assert stripe_payments.main(["summary"]) == 0
-    assert capsys.readouterr().out == ""
+    assert capsys.readouterr().out == "统计范围 无记录\n"
     assert [request["path"] for request in stripe_api.requests] == [
         "/v1/payment_intents",
         "/v1/refunds",
@@ -1208,6 +1211,7 @@ def test_cli_summary_currency_prints_only_that_currency_line(
     # Issue #243: the total only adds up the lines actually printed, so the
     # filtered run shows the usd total, not the all-currency one.
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
         "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
         # The two usd payments and the refund behind the printed row.
@@ -1226,6 +1230,7 @@ def test_cli_summary_currency_is_case_insensitive(
     assert stripe_payments.main(["summary", "--currency", "USD"]) == 0
 
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
         "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
         "总笔数 3",
@@ -1236,12 +1241,14 @@ def test_cli_summary_currency_is_case_insensitive(
     ]
 
 
-def test_cli_summary_currency_without_records_prints_nothing(
+def test_cli_summary_currency_without_records_prints_only_the_range_line(
     live_key, stripe_summary_lists, capsys
 ):
     assert stripe_payments.main(["summary", "--currency", "jpy"]) == 0
 
-    assert capsys.readouterr().out == ""
+    assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14"
+    ]
     # The totals still come from the real lists, so the account is read even
     # when the requested currency has no records.
     assert [
@@ -1323,7 +1330,9 @@ def test_summary_total_equals_the_sum_of_the_printed_currency_values(
     assert stripe_payments.main(["summary"]) == 0
 
     printed = capsys.readouterr().out.splitlines()
-    currency_lines, total_line = printed[:-6], printed[-6]
+    # Issue #321: the range line is the first printed line, not a total row.
+    assert printed[0].startswith(stripe_payments.SUMMARY_RANGE_LABEL)
+    currency_lines, total_line = printed[1:-6], printed[-6]
     assert total_line.split()[0] == stripe_payments.SUMMARY_TOTAL_LABEL
     for field in SUMMARY_FIELDS:
         assert _printed_value(total_line, field) == sum(
@@ -1346,6 +1355,7 @@ def test_summary_total_adds_zero_decimal_currency_values(
 
     assert stripe_payments.main(["summary"]) == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         "JPY 付款 1,000 退款 0 净额 1,000",
         "USD 付款 1,234.56 退款 0.00 净额 1,234.56",
         "合计 付款 2,234.56 退款 0.00 净额 2,234.56",
@@ -1368,6 +1378,7 @@ def test_summary_total_keeps_a_negative_net(live_key, stripe_api, capsys):
 
     assert stripe_payments.main(["summary"]) == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         "USD 付款 0.50 退款 1.00 净额 -0.50",
         "合计 付款 0.50 退款 1.00 净额 -0.50",
         # One payment and one refund.
@@ -1431,13 +1442,13 @@ def test_summary_count_counts_every_record_once_across_the_groups(
 def test_summary_count_line_follows_the_existing_output_rules(
     live_key, stripe_api, capsys
 ):
-    """No rows (or `--quiet`) keeps the output exactly as before."""
+    """No rows prints only the range line; `--quiet` stays net-only."""
     stripe_api.list_payloads = {
         "/v1/payment_intents": _list_payload(),
         "/v1/refunds": _list_payload(),
     }
     assert stripe_payments.main(["summary"]) == 0
-    assert capsys.readouterr().out == ""
+    assert capsys.readouterr().out == "统计范围 无记录\n"
 
     stripe_api.list_payloads = {
         "/v1/payment_intents": _list_payload(_intent("pi_1", 123456, "usd")),
@@ -1519,6 +1530,7 @@ def test_summary_average_rounds_half_up(live_key, stripe_api, capsys):
 
     assert stripe_payments.main(["summary"]) == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         "USD 付款 0.05 退款 0.00 净额 0.05",
         "合计 付款 0.05 退款 0.00 净额 0.05",
         "总笔数 2",
@@ -1540,6 +1552,7 @@ def test_summary_average_keeps_a_negative_net(live_key, stripe_api, capsys):
 
     assert stripe_payments.main(["summary"]) == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         "USD 付款 0.02 退款 0.07 净额 -0.05",
         "合计 付款 0.02 退款 0.07 净额 -0.05",
         "总笔数 2",
@@ -1565,6 +1578,7 @@ def test_summary_average_formats_zero_decimal_amounts_like_the_total(
 
     assert stripe_payments.main(["summary"]) == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         "JPY 付款 1,001 退款 0 净额 1,001",
         "合计 付款 1,001.00 退款 0.00 净额 1,001.00",
         "总笔数 2",
@@ -1579,13 +1593,13 @@ def test_summary_average_formats_zero_decimal_amounts_like_the_total(
 def test_summary_average_line_follows_the_existing_output_rules(
     live_key, stripe_api, capsys
 ):
-    """No rows (or `--quiet`) keeps the output exactly as before."""
+    """No rows prints only the range line; `--quiet` stays net-only."""
     stripe_api.list_payloads = {
         "/v1/payment_intents": _list_payload(),
         "/v1/refunds": _list_payload(),
     }
     assert stripe_payments.main(["summary"]) == 0
-    assert capsys.readouterr().out == ""
+    assert capsys.readouterr().out == "统计范围 无记录\n"
 
     stripe_api.list_payloads = {
         "/v1/payment_intents": _list_payload(_intent("pi_1", 123456, "usd")),
@@ -1661,6 +1675,7 @@ def test_summary_largest_amount_counts_a_refund_as_a_record(
 
     assert stripe_payments.main(["summary"]) == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         "USD 付款 0.02 退款 0.07 净额 -0.05",
         "合计 付款 0.02 退款 0.07 净额 -0.05",
         "总笔数 2",
@@ -1685,6 +1700,7 @@ def test_summary_largest_amount_formats_zero_decimal_amounts_like_the_total(
 
     assert stripe_payments.main(["summary"]) == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         "JPY 付款 1,001 退款 0 净额 1,001",
         "合计 付款 1,001.00 退款 0.00 净额 1,001.00",
         "总笔数 2",
@@ -1698,13 +1714,13 @@ def test_summary_largest_amount_formats_zero_decimal_amounts_like_the_total(
 def test_summary_largest_line_follows_the_existing_output_rules(
     live_key, stripe_api, capsys
 ):
-    """No rows (or `--quiet`) keeps the output exactly as before."""
+    """No rows prints only the range line; `--quiet` stays net-only."""
     stripe_api.list_payloads = {
         "/v1/payment_intents": _list_payload(),
         "/v1/refunds": _list_payload(),
     }
     assert stripe_payments.main(["summary"]) == 0
-    assert capsys.readouterr().out == ""
+    assert capsys.readouterr().out == "统计范围 无记录\n"
 
     stripe_api.list_payloads = {
         "/v1/payment_intents": _list_payload(_intent("pi_1", 123456, "usd")),
@@ -1737,6 +1753,26 @@ def _summary_csv_rows(output_dir, date=EXPORT_DATE):
                 newline="", encoding="utf-8"
             )
         )
+    )
+
+
+# Issue #321: the summary opens with the range line and closes with the
+# total, count, average, largest, smallest and record lines, so a test that
+# parses the per-currency rows skips all of them.
+SUMMARY_FOOTER_LABELS = (
+    stripe_payments.SUMMARY_TOTAL_LABEL,
+    stripe_payments.SUMMARY_COUNT_LABEL,
+    stripe_payments.SUMMARY_AVERAGE_LABEL,
+    stripe_payments.SUMMARY_LARGEST_LABEL,
+    stripe_payments.SUMMARY_SMALLEST_LABEL,
+    stripe_payments.SUMMARY_RECORD_LABEL,
+)
+
+
+def _is_summary_row(line):
+    """True for a printed currency or grouping row, false for a footer line."""
+    return not line.startswith(
+        (stripe_payments.SUMMARY_RANGE_LABEL,) + SUMMARY_FOOTER_LABELS
     )
 
 
@@ -1877,9 +1913,12 @@ def test_summary_csv_without_records_writes_only_the_header(
         == 0
     )
 
-    assert capsys.readouterr().out.strip() == (
-        f"exported summary rows=0 to {_summary_csv_file(output_dir)}"
-    )
+    # Issue #321: the range line says nothing was totalled, and the CSV stays
+    # header-only, so the file notice is still the last line.
+    assert capsys.readouterr().out.splitlines() == [
+        "统计范围 无记录",
+        f"exported summary rows=0 to {_summary_csv_file(output_dir)}",
+    ]
     assert _summary_csv_rows(output_dir) == [SUMMARY_CSV_HEADER]
 
 
@@ -1894,6 +1933,7 @@ def test_summary_without_the_csv_option_writes_no_file(
 
     # The default output is unchanged: the printed lines, no file.
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         *SUMMARY_SAMPLE_LINES,
         SUMMARY_TOTAL_LINE,
         SUMMARY_COUNT_SAMPLE_LINE,
@@ -2025,12 +2065,7 @@ def _by_month_groups(printed):
     return {
         (fields[0], fields[1]): _printed_amounts(line)
         for line in printed
-        if not line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL)
-        and not line.startswith(stripe_payments.SUMMARY_COUNT_LABEL)
-        and not line.startswith(stripe_payments.SUMMARY_AVERAGE_LABEL)
-        and not line.startswith(stripe_payments.SUMMARY_LARGEST_LABEL)
-        and not line.startswith(stripe_payments.SUMMARY_SMALLEST_LABEL)
-        and not line.startswith(stripe_payments.SUMMARY_RECORD_LABEL)
+        if _is_summary_row(line)
         for fields in [line.split()]
     }
 
@@ -2065,6 +2100,7 @@ def test_cli_summary_by_month_groups_each_currency_per_month(
     assert stripe_payments.main(["summary", "--by-month"]) == 0
 
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2026-09-10..2026-10-31",
         *BY_MONTH_SAMPLE_LINES,
         BY_MONTH_TOTAL_LINE,
         BY_MONTH_COUNT_LINE,
@@ -2089,14 +2125,7 @@ def test_summary_by_month_values_match_each_months_records(
     assert stripe_payments.main(["summary"]) == 0
     plain = {}
     for line in capsys.readouterr().out.splitlines():
-        if (
-            line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL)
-            or line.startswith(stripe_payments.SUMMARY_COUNT_LABEL)
-            or line.startswith(stripe_payments.SUMMARY_AVERAGE_LABEL)
-            or line.startswith(stripe_payments.SUMMARY_LARGEST_LABEL)
-            or line.startswith(stripe_payments.SUMMARY_SMALLEST_LABEL)
-            or line.startswith(stripe_payments.SUMMARY_RECORD_LABEL)
-        ):
+        if not _is_summary_row(line):
             continue
         fields = line.split()
         plain[fields[0]] = _printed_amounts(line)
@@ -2145,6 +2174,7 @@ def test_summary_by_month_totals_every_page(live_key, stripe_api, capsys):
 
     assert stripe_payments.main(["summary", "--by-month"]) == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2026-09-10..2026-10-10",
         "2026-09 USD 付款 10.00 退款 0.00 净额 10.00",
         "2026-10 USD 付款 20.00 退款 0.00 净额 20.00",
         "合计 付款 30.00 退款 0.00 净额 30.00",
@@ -2167,6 +2197,7 @@ def test_summary_by_month_follows_the_currency_filter(
     ) == 0
 
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2026-09-10..2026-10-31",
         "2026-09 USD 付款 10.00 退款 0.50 净额 9.50",
         "2026-10 USD 付款 1,234.57 退款 1.00 净额 1,233.57",
         "合计 付款 1,244.57 退款 1.50 净额 1,243.07",
@@ -2180,7 +2211,7 @@ def test_summary_by_month_follows_the_currency_filter(
     ]
 
 
-def test_summary_by_month_without_records_prints_nothing(
+def test_summary_by_month_without_records_prints_only_the_range_line(
     live_key, stripe_api, capsys
 ):
     stripe_api.list_payloads = {
@@ -2189,7 +2220,7 @@ def test_summary_by_month_without_records_prints_nothing(
     }
 
     assert stripe_payments.main(["summary", "--by-month"]) == 0
-    assert capsys.readouterr().out == ""
+    assert capsys.readouterr().out == "统计范围 无记录\n"
 
 
 def test_summary_by_month_csv_adds_the_month_column(
@@ -2294,14 +2325,7 @@ def test_summary_quiet_net_values_equal_the_plain_summary_nets(
     assert stripe_payments.main(["summary"]) == 0
     plain = {}
     for line in capsys.readouterr().out.splitlines():
-        if (
-            line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL)
-            or line.startswith(stripe_payments.SUMMARY_COUNT_LABEL)
-            or line.startswith(stripe_payments.SUMMARY_AVERAGE_LABEL)
-            or line.startswith(stripe_payments.SUMMARY_LARGEST_LABEL)
-            or line.startswith(stripe_payments.SUMMARY_SMALLEST_LABEL)
-            or line.startswith(stripe_payments.SUMMARY_RECORD_LABEL)
-        ):
+        if not _is_summary_row(line):
             continue
         fields = line.split()
         plain[fields[0]] = fields[-1]
@@ -2457,6 +2481,7 @@ def test_cli_summary_top_prints_only_the_largest_net_currencies(
 
     assert exit_code == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         *TOP_SAMPLE_LINES,
         TOP_SAMPLE_TOTAL_LINE,
         # The two usd payments, the usd refund and the eur payment.
@@ -2482,6 +2507,7 @@ def test_summary_without_top_prints_every_currency_as_before(
     assert stripe_payments.main(["summary"]) == 0
 
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         "EUR 付款 500.00 退款 0.00 净额 500.00",
         "GBP 付款 0.00 退款 2.00 净额 -2.00",
         "JPY 付款 500 退款 0 净额 500",
@@ -2502,6 +2528,7 @@ def test_summary_top_larger_than_the_currency_count_prints_every_currency(
     assert stripe_payments.main(["summary", "--top", "10"]) == 0
 
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         *TOP_ALL_LINES,
         "合计 付款 2,234.57 退款 3.00 净额 2,231.57",
         "总笔数 6",
@@ -2519,6 +2546,7 @@ def test_summary_top_breaks_equal_net_totals_by_currency(
     assert stripe_payments.main(["summary", "--top", "3"]) == 0
 
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         *TOP_ALL_LINES[:3],
         "合计 付款 2,234.57 退款 1.00 净额 2,233.57",
         # The two usd payments, the usd refund, the eur and jpy payments.
@@ -2530,7 +2558,7 @@ def test_summary_top_breaks_equal_net_totals_by_currency(
     ]
 
 
-def test_summary_top_without_records_prints_nothing(
+def test_summary_top_without_records_prints_only_the_range_line(
     live_key, stripe_api, capsys
 ):
     stripe_api.list_payloads = {
@@ -2539,7 +2567,7 @@ def test_summary_top_without_records_prints_nothing(
     }
 
     assert stripe_payments.main(["summary", "--top", "2"]) == 0
-    assert capsys.readouterr().out == ""
+    assert capsys.readouterr().out == "统计范围 无记录\n"
 
 
 def test_summary_top_composes_with_quiet(live_key, stripe_top_lists, capsys):
@@ -2560,6 +2588,7 @@ def test_summary_top_follows_the_currency_filter(
     )
 
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         TOP_SAMPLE_LINES[0],
         "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
         "总笔数 3",
@@ -2576,6 +2605,7 @@ def test_summary_top_by_month_keeps_the_largest_month_currency_groups(
     assert stripe_payments.main(["summary", "--top", "2", "--by-month"]) == 0
 
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2026-09-10..2026-10-31",
         "2026-10 USD 付款 1,234.57 退款 1.00 净额 1,233.57",
         "2026-09 JPY 付款 500 退款 0 净额 500",
         TOP_SAMPLE_TOTAL_LINE,
@@ -2609,7 +2639,9 @@ def test_summary_top_csv_writes_only_the_selected_rows(
     )
 
     printed = capsys.readouterr().out.splitlines()
-    assert printed[:7] == [
+    # Issue #321: the range line comes first, before the selected rows.
+    assert printed[:8] == [
+        "统计范围 2023-11-14..2023-11-14",
         TOP_SAMPLE_LINES[0],
         "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
         # The printed usd row's two payments and one refund.
@@ -2620,7 +2652,7 @@ def test_summary_top_csv_writes_only_the_selected_rows(
         # Issue #298: the record-count line closes the summary block.
         "记录 3 条",
     ]
-    assert printed[7].startswith("exported summary rows=1 to ")
+    assert printed[8].startswith("exported summary rows=1 to ")
     assert _summary_csv_rows(output_dir) == [
         SUMMARY_CSV_HEADER,
         ["USD", "1,234.57", "1.00", "1,233.57"],
@@ -2755,6 +2787,7 @@ def test_cli_summary_days_totals_only_the_last_30_days(
 
     assert exit_code == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2026-09-28..2026-10-27",
         *DAYS_SAMPLE_LINES,
         DAYS_TOTAL_LINE,
         DAYS_COUNT_LINE,
@@ -2788,6 +2821,7 @@ def test_summary_without_days_reads_the_whole_account_as_before(
     assert stripe_payments.main(["summary"]) == 0
 
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2026-09-27..2026-10-27",
         "EUR 付款 10.00 退款 0.00 净额 10.00",
         "USD 付款 1,334.56 退款 3.00 净额 1,331.56",
         "合计 付款 1,344.56 退款 3.00 净额 1,341.56",
@@ -2813,6 +2847,7 @@ def test_summary_days_by_month_groups_only_the_window(
     )
 
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2026-09-28..2026-10-27",
         "2026-09 EUR 付款 10.00 退款 0.00 净额 10.00",
         "2026-10 USD 付款 1,234.57 退款 1.00 净额 1,233.57",
         "合计 付款 1,244.57 退款 1.00 净额 1,243.57",
@@ -2940,6 +2975,7 @@ def test_cli_summary_since_and_until_total_only_the_window(
 
     assert exit_code == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2026-10-01..2026-10-31",
         "EUR 付款 5.00 退款 0.00 净额 5.00",
         "USD 付款 1,234.57 退款 0.50 净额 1,234.07",
         "合计 付款 1,239.57 退款 0.50 净额 1,239.07",
@@ -2960,6 +2996,7 @@ def test_summary_since_alone_totals_everything_from_that_day_onwards(
     assert stripe_payments.main(["summary", "--since", "2026-10-01"]) == 0
 
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2026-10-01..2026-11-02",
         "EUR 付款 5.00 退款 0.00 净额 5.00",
         "USD 付款 1,334.56 退款 2.50 净额 1,332.06",
         "合计 付款 1,339.56 退款 2.50 净额 1,337.06",
@@ -2979,6 +3016,7 @@ def test_summary_until_alone_totals_everything_up_to_and_including_that_day(
     assert stripe_payments.main(["summary", "--until", "2026-10-31"]) == 0
 
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2026-09-15..2026-10-31",
         "EUR 付款 5.00 退款 0.00 净额 5.00",
         "USD 付款 1,244.57 退款 1.50 净额 1,243.07",
         "合计 付款 1,249.57 退款 1.50 净额 1,248.07",
@@ -2998,6 +3036,7 @@ def test_summary_without_since_and_until_totals_the_whole_account(
     assert stripe_payments.main(["summary"]) == 0
 
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2026-09-15..2026-11-02",
         "EUR 付款 5.00 退款 0.00 净额 5.00",
         "USD 付款 1,344.56 退款 3.50 净额 1,341.06",
         "合计 付款 1,349.56 退款 3.50 净额 1,346.06",
@@ -3180,6 +3219,7 @@ def test_cli_summary_by_customer_groups_each_currency_per_customer(
 
     assert exit_code == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         *BY_CUSTOMER_SAMPLE_LINES,
         BY_CUSTOMER_TOTAL_LINE,
         BY_CUSTOMER_COUNT_LINE,
@@ -3207,7 +3247,8 @@ def test_summary_by_customer_rows_add_up_to_the_plain_summary(
     assert grouped_lines[-2] == BY_CUSTOMER_SMALLEST_LINE
     assert grouped_lines[-1] == "记录 6 条"
     grouped = {}
-    for line in grouped_lines[:-6]:
+    # Issue #321: the range line is the first printed line, not a row.
+    for line in grouped_lines[1:-6]:
         fields = line.split()
         currency = fields[fields.index("付款") - 1]
         running = grouped.setdefault(currency, [Decimal(0)] * 3)
@@ -3218,12 +3259,7 @@ def test_summary_by_customer_rows_add_up_to_the_plain_summary(
     plain = {
         fields[0]: _printed_amounts(line)
         for line in capsys.readouterr().out.splitlines()
-        if not line.startswith(stripe_payments.SUMMARY_TOTAL_LABEL)
-        and not line.startswith(stripe_payments.SUMMARY_COUNT_LABEL)
-        and not line.startswith(stripe_payments.SUMMARY_AVERAGE_LABEL)
-        and not line.startswith(stripe_payments.SUMMARY_LARGEST_LABEL)
-        and not line.startswith(stripe_payments.SUMMARY_SMALLEST_LABEL)
-        and not line.startswith(stripe_payments.SUMMARY_RECORD_LABEL)
+        if _is_summary_row(line)
         for fields in [line.split()]
     }
     assert {code: tuple(values) for code, values in grouped.items()} == plain
@@ -3247,6 +3283,7 @@ def test_summary_by_customer_attributes_a_refund_to_its_payments_customer(
 
     assert stripe_payments.main(["summary", "--by-customer"]) == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         "cus_alpha USD 付款 10.00 退款 1.00 净额 9.00",
         "（未归属客户） USD 付款 0.00 退款 0.50 净额 -0.50",
         "合计 付款 10.00 退款 1.50 净额 8.50",
@@ -3269,6 +3306,7 @@ def test_summary_by_customer_follows_the_currency_filter(
     )
 
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         "cus_alpha USD 付款 1,234.57 退款 1.00 净额 1,233.57",
         "（未归属客户） USD 付款 5.00 退款 0.50 净额 4.50",
         "合计 付款 1,239.57 退款 1.50 净额 1,238.07",
@@ -3361,6 +3399,7 @@ def test_summary_by_customer_by_month_prefixes_customer_then_month(
     )
 
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2026-09-10..2026-10-12",
         "cus_alpha 2026-09 USD 付款 10.00 退款 0.00 净额 10.00",
         "cus_alpha 2026-10 USD 付款 20.00 退款 1.00 净额 19.00",
         "cus_beta 2026-10 EUR 付款 5.00 退款 0.00 净额 5.00",
@@ -5502,6 +5541,7 @@ def test_summary_days_7_totals_only_the_last_7_days(
 
     assert exit_code == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2026-10-21..2026-10-27",
         *DAYS_7_SAMPLE_LINES,
         DAYS_7_TOTAL_LINE,
         # Two payments and two refunds inside the 7-day window.
@@ -5547,7 +5587,9 @@ def test_summary_days_7_succeeds_when_every_record_is_older(
 
     captured = capsys.readouterr()
     assert exit_code == 0
-    assert captured.out == ""
+    # Issue #321: the window holds no record, so the range line says so and
+    # no currency or footer row follows it.
+    assert captured.out == "统计范围 无记录\n"
     assert captured.err == ""
 
 
@@ -5580,6 +5622,8 @@ def test_module_summary_days_7_totals_only_the_last_7_days(
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
     assert result.stdout.splitlines() == [
+        # Issue #321: the one-day-old records share one UTC day.
+        stripe_payments._summary_range_line(one_day_ago, one_day_ago),
         "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
         "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
         # Only the one-day-old payment and refund are in the window.
@@ -5672,6 +5716,7 @@ def test_module_summary_by_month_groups_the_totals_by_month(
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
     assert result.stdout.splitlines() == [
+        "统计范围 2026-09-10..2027-01-01",
         *BY_MONTH_MODULE_SAMPLE_LINES,
         BY_MONTH_MODULE_TOTAL_LINE,
         # Seven payments and three refunds split into the month groups.
@@ -5718,6 +5763,7 @@ def test_module_summary_by_month_adds_up_to_the_plain_summary(
     assert by_month.returncode == 0, by_month.stderr
     assert plain.returncode == 0, plain.stderr
     assert by_month.stdout.splitlines() == [
+        "统计范围 2026-09-10..2026-10-08",
         "2026-09 USD 付款 10.00 退款 0.00 净额 10.00",
         "2026-10 USD 付款 7.00 退款 1.00 净额 6.00",
         "合计 付款 17.00 退款 1.00 净额 16.00",
@@ -5729,6 +5775,7 @@ def test_module_summary_by_month_adds_up_to_the_plain_summary(
     ]
     # The same records, one line per currency, when --by-month is omitted.
     assert plain.stdout.splitlines() == [
+        "统计范围 2026-09-10..2026-10-08",
         "USD 付款 17.00 退款 1.00 净额 16.00",
         "合计 付款 17.00 退款 1.00 净额 16.00",
         "总笔数 3",
@@ -5922,6 +5969,7 @@ def test_summary_largest_line_is_the_biggest_of_three_records(
 
     printed = capsys.readouterr().out.splitlines()
     assert printed == [
+        "统计范围 2023-11-14..2023-11-14",
         "USD 付款 1,251.96 退款 0.00 净额 1,251.96",
         "合计 付款 1,251.96 退款 0.00 净额 1,251.96",
         "总笔数 3",
@@ -5952,8 +6000,8 @@ def test_summary_largest_line_is_zero_when_there_are_no_records(
     # The documented empty-account contract: no currency row means no summary
     # rows at all, so the printed output ends before the largest line and the
     # largest amount behind it is 0 ...
-    assert capsys.readouterr().out == ""
-    assert stripe_payments.summarize_data() == {}
+    assert capsys.readouterr().out == "统计范围 无记录\n"
+    assert stripe_payments.summarize_data() == ({}, None, None)
     # ... and the line the summary renders for a 0 maximum shows 0 in the same
     # amount format as every other value, so 0.00 is what the empty case adds
     # up to.
@@ -6057,6 +6105,7 @@ def test_summary_smallest_amount_counts_a_refund_as_a_record(
 
     assert stripe_payments.main(["summary"]) == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         "USD 付款 7.00 退款 0.02 净额 6.98",
         "合计 付款 7.00 退款 0.02 净额 6.98",
         "总笔数 2",
@@ -6080,6 +6129,7 @@ def test_summary_smallest_amount_formats_zero_decimal_amounts_like_the_total(
 
     assert stripe_payments.main(["summary"]) == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2023-11-14..2023-11-14",
         "JPY 付款 1,001 退款 0 净额 1,001",
         "合计 付款 1,001.00 退款 0.00 净额 1,001.00",
         "总笔数 2",
@@ -6093,14 +6143,14 @@ def test_summary_smallest_amount_formats_zero_decimal_amounts_like_the_total(
 def test_summary_smallest_line_follows_the_existing_output_rules(
     live_key, stripe_api, capsys
 ):
-    """No rows (or `--quiet`) keeps the output exactly as before."""
+    """No rows prints only the range line; `--quiet` stays net-only."""
     stripe_api.list_payloads = {
         "/v1/payment_intents": _list_payload(),
         "/v1/refunds": _list_payload(),
     }
     assert stripe_payments.main(["summary"]) == 0
-    assert capsys.readouterr().out == ""
-    assert stripe_payments.summarize_data() == {}
+    assert capsys.readouterr().out == "统计范围 无记录\n"
+    assert stripe_payments.summarize_data() == ({}, None, None)
 
     stripe_api.list_payloads = {
         "/v1/payment_intents": _list_payload(_intent("pi_1", 123456, "usd")),
@@ -6218,14 +6268,14 @@ def test_summary_record_count_follows_the_printed_rows(
 def test_summary_record_line_follows_the_existing_output_rules(
     live_key, stripe_api, capsys
 ):
-    """No rows (or `--quiet`) keeps the output exactly as before."""
+    """No rows prints only the range line; `--quiet` stays net-only."""
     stripe_api.list_payloads = {
         "/v1/payment_intents": _list_payload(),
         "/v1/refunds": _list_payload(),
     }
     # Acceptance: an empty account prints nothing, not `记录 0 条`.
     assert stripe_payments.main(["summary"]) == 0
-    assert capsys.readouterr().out == ""
+    assert capsys.readouterr().out == "统计范围 无记录\n"
 
     stripe_api.list_payloads = {
         "/v1/payment_intents": _list_payload(_intent("pi_1", 123456, "usd")),
@@ -6353,6 +6403,7 @@ def test_cli_summary_since_until_totals_only_the_day_window(
 
     assert exit_code == 0
     assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2026-09-01..2026-09-30",
         *WINDOW_SAMPLE_LINES,
         WINDOW_TOTAL_LINE,
         WINDOW_COUNT_LINE,
@@ -6424,7 +6475,8 @@ def test_summary_since_until_by_month_groups_only_the_window(
     )
 
     assert capsys.readouterr().out.splitlines() == [
-        f"2026-09 {line}" for line in WINDOW_SAMPLE_LINES
+        "统计范围 2026-09-01..2026-09-30",
+        *[f"2026-09 {line}" for line in WINDOW_SAMPLE_LINES],
     ] + [
         WINDOW_TOTAL_LINE,
         WINDOW_COUNT_LINE,
@@ -6531,7 +6583,13 @@ def test_summary_since_until_keeps_the_existing_filters_on_the_window(
     )
 
     assert exit_code == 0
-    assert capsys.readouterr().out.splitlines() == expected_lines
+    printed = capsys.readouterr().out.splitlines()
+    if extra_arguments == ["--quiet"]:
+        # Issue #321: --quiet stays the net-only output.
+        assert printed == expected_lines
+    else:
+        # Issue #321: the window's range line opens the full output.
+        assert printed == ["统计范围 2026-09-01..2026-09-30", *expected_lines]
 
 
 def test_summary_days_and_since_take_the_intersection(
@@ -6644,6 +6702,7 @@ def test_module_summary_since_until_totals_the_window(
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
     assert result.stdout.splitlines() == [
+        "统计范围 2026-09-10..2026-09-30",
         "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
         "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
         "总笔数 2",
@@ -7143,6 +7202,15 @@ def test_module_export_since_until_rejects_a_bad_date_without_writing(
 # The acceptance account of Issue #318: one succeeded usd payment and one
 # succeeded usd refund, plus a canceled usd payment and a failed usd refund
 # that must not reach any summary line, count or CSV row.
+#
+# The records sit inside the last 30 days of the pinned summary clock, so the
+# --days variant sees the same two succeeded records.
+SUCCEEDED_ONLY_CREATED = DAYS_NOW - 24 * 60 * 60
+# Issue #321: both succeeded records share one UTC day, so the range line
+# covers that day only.
+SUCCEEDED_ONLY_RANGE_LINE = stripe_payments._summary_range_line(
+    SUCCEEDED_ONLY_CREATED, SUCCEEDED_ONLY_CREATED
+)
 SUCCEEDED_ONLY_LINES = [
     "USD 付款 10.00 退款 1.00 净额 9.00",
     "合计 付款 10.00 退款 1.00 净额 9.00",
@@ -7152,9 +7220,8 @@ SUCCEEDED_ONLY_LINES = [
     "最小单笔金额 1.00",
     "记录 2 条",
 ]
-# The records sit inside the last 30 days of the pinned summary clock, so the
-# --days variant sees the same two succeeded records.
-SUCCEEDED_ONLY_CREATED = DAYS_NOW - 24 * 60 * 60
+# The complete printed output: the range line in front of those lines.
+SUCCEEDED_ONLY_OUTPUT = [SUCCEEDED_ONLY_RANGE_LINE, *SUCCEEDED_ONLY_LINES]
 
 
 def _with_status(record, status):
@@ -7219,7 +7286,7 @@ def test_cli_summary_totals_only_succeeded_records(
     exit_code = stripe_payments.main(["summary"])
 
     assert exit_code == 0
-    assert capsys.readouterr().out.splitlines() == SUCCEEDED_ONLY_LINES
+    assert capsys.readouterr().out.splitlines() == SUCCEEDED_ONLY_OUTPUT
 
 
 def test_module_summary_totals_only_succeeded_records(
@@ -7236,7 +7303,7 @@ def test_module_summary_totals_only_succeeded_records(
 
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
-    assert result.stdout.splitlines() == SUCCEEDED_ONLY_LINES
+    assert result.stdout.splitlines() == SUCCEEDED_ONLY_OUTPUT
 
 
 def test_summary_skips_non_succeeded_records_on_every_page(
@@ -7258,7 +7325,7 @@ def test_summary_skips_non_succeeded_records_on_every_page(
     }
 
     assert stripe_payments.main(["summary"]) == 0
-    assert capsys.readouterr().out.splitlines() == SUCCEEDED_ONLY_LINES
+    assert capsys.readouterr().out.splitlines() == SUCCEEDED_ONLY_OUTPUT
 
 
 def test_summary_csv_rows_skip_non_succeeded_records(
@@ -7285,6 +7352,7 @@ def test_summary_by_month_skips_non_succeeded_records(
     """Issue #318: ``--by-month`` shows only the succeeded month row."""
     assert stripe_payments.main(["summary", "--by-month"]) == 0
     assert capsys.readouterr().out.splitlines() == [
+        SUCCEEDED_ONLY_RANGE_LINE,
         "2026-10 USD 付款 10.00 退款 1.00 净额 9.00",
         *SUCCEEDED_ONLY_LINES[1:],
     ]
@@ -7296,6 +7364,7 @@ def test_summary_by_customer_skips_non_succeeded_records(
     """Issue #318: ``--by-customer`` has no group for the skipped records."""
     assert stripe_payments.main(["summary", "--by-customer"]) == 0
     assert capsys.readouterr().out.splitlines() == [
+        SUCCEEDED_ONLY_RANGE_LINE,
         "cus_alpha USD 付款 10.00 退款 1.00 净额 9.00",
         *SUCCEEDED_ONLY_LINES[1:],
     ]
@@ -7314,7 +7383,7 @@ def test_summary_top_skips_non_succeeded_records(
 ):
     """Issue #318: ``--top 1`` ranks the succeeded net only."""
     assert stripe_payments.main(["summary", "--top", "1"]) == 0
-    assert capsys.readouterr().out.splitlines() == SUCCEEDED_ONLY_LINES
+    assert capsys.readouterr().out.splitlines() == SUCCEEDED_ONLY_OUTPUT
 
 
 def test_summary_days_skips_non_succeeded_records(
@@ -7322,7 +7391,7 @@ def test_summary_days_skips_non_succeeded_records(
 ):
     """Issue #318: ``--days 30`` counts only the succeeded records."""
     assert stripe_payments.main(["summary", "--days", "30"]) == 0
-    assert capsys.readouterr().out.splitlines() == SUCCEEDED_ONLY_LINES
+    assert capsys.readouterr().out.splitlines() == SUCCEEDED_ONLY_OUTPUT
     # The window filter is still pushed down to Stripe.
     assert [
         request["form"]["created[gte]"]
@@ -7355,3 +7424,287 @@ def test_refunds_summary_still_counts_every_refund_status(
         # still every refund status, so all three records stay counted.
         "合计 退款 3 笔 16.00",
     ]
+
+
+# --- summary range line (Issue #321) -----------------------------------
+#
+# Every full `summary` run opens with the UTC day range of the records it
+# totalled, e.g. 统计范围 2026-09-05..2026-10-20, and a run that totalled no
+# record opens with 统计范围 无记录.  The range is read from the records
+# themselves, so --since/--until, --days and a plain run all print a real
+# range.
+
+SUMMARY_RANGE_SAMPLE_LINE = "统计范围 2026-09-05..2026-10-20"
+# The earliest and latest totalled record of the fixture below, in UTC days.
+SUMMARY_RANGE_FIRST = _utc(2026, 9, 5, 0, 0)
+SUMMARY_RANGE_LAST = _utc(2026, 10, 20, 23, 59, 59)
+
+
+def _range_intent(identifier, amount, currency, created):
+    return {
+        "id": identifier,
+        "object": "payment_intent",
+        "amount": amount,
+        "currency": currency,
+        "status": "succeeded",
+        "created": created,
+    }
+
+
+def _range_refund(identifier, amount, currency, created):
+    return {
+        "id": identifier,
+        "object": "refund",
+        "payment_intent": "pi_range_1",
+        "amount": amount,
+        "currency": currency,
+        "status": "succeeded",
+        "created": created,
+    }
+
+
+@pytest.fixture
+def stripe_range_lists(stripe_api):
+    """Records whose earliest and latest UTC created days are far apart."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _range_intent("pi_range_1", 123456, "usd", SUMMARY_RANGE_FIRST),
+            _range_intent("pi_range_2", 1, "usd", _utc(2026, 9, 28, 12, 0)),
+        ),
+        "/v1/refunds": _list_payload(
+            _range_refund("re_range_1", 100, "usd", SUMMARY_RANGE_LAST)
+        ),
+    }
+    return stripe_api
+
+
+# The complete output of the fixture above: the range line, then exactly the
+# currency line and the footer the command printed before Issue #321.
+SUMMARY_RANGE_LINES = [
+    SUMMARY_RANGE_SAMPLE_LINE,
+    "USD 付款 1,234.57 退款 1.00 净额 1,233.57",
+    "合计 付款 1,234.57 退款 1.00 净额 1,233.57",
+    "总笔数 3",
+    "平均金额 411.19",
+    "最大单笔金额 1,234.56",
+    "最小单笔金额 0.01",
+    "记录 3 条",
+]
+
+
+def test_summary_range_line_is_the_first_printed_line(
+    live_key, stripe_range_lists, capsys
+):
+    """Acceptance 1: today's output with exactly one line added in front."""
+    assert stripe_payments.main(["summary"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == SUMMARY_RANGE_LINES
+
+
+def test_module_summary_prints_the_range_line_first(
+    local_stripe_server, tmp_path
+):
+    """The real user entry point: python -m stripe_payments summary."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _range_intent("pi_range_1", 123456, "usd", SUMMARY_RANGE_FIRST),
+            _range_intent("pi_range_2", 1, "usd", _utc(2026, 9, 28, 12, 0)),
+        ),
+        "/v1/refunds": _list_payload(
+            _range_refund("re_range_1", 100, "usd", SUMMARY_RANGE_LAST)
+        ),
+    }
+
+    result = _run_module_command(server, ["summary"], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout.splitlines() == SUMMARY_RANGE_LINES
+
+
+def test_summary_range_line_is_the_real_line_format():
+    """Acceptance 1/2: the exact label, UTC days and the empty-records text."""
+    assert stripe_payments.SUMMARY_RANGE_LABEL == "统计范围"
+    assert (
+        stripe_payments._summary_range_line(
+            SUMMARY_RANGE_FIRST, SUMMARY_RANGE_LAST
+        )
+        == SUMMARY_RANGE_SAMPLE_LINE
+    )
+    # UTC days, so the 23:59:59Z record still belongs to its own day.
+    assert stripe_payments._summary_range_line(
+        SUMMARY_RANGE_LAST, SUMMARY_RANGE_LAST
+    ) == "统计范围 2026-10-20..2026-10-20"
+    assert stripe_payments._summary_range_line(None, None) == "统计范围 无记录"
+
+
+def test_module_summary_without_records_prints_only_the_range_line(
+    local_stripe_server, tmp_path
+):
+    """Acceptance 2 at the real command: one line and exit code 0."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/payment_intents": _list_payload(),
+        "/v1/refunds": _list_payload(),
+    }
+
+    result = _run_module_command(server, ["summary"], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout == "统计范围 无记录\n"
+
+
+def test_summary_range_line_is_no_records_inside_an_empty_window(
+    live_key, stripe_api, capsys
+):
+    """Acceptance 2 for a --since/--until window that contains no record."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _range_intent(
+                "pi_before", 1000, "usd", _utc(2026, 8, 31, 23, 59, 59)
+            )
+        ),
+        "/v1/refunds": _list_payload(
+            _range_refund("re_after", 100, "usd", _utc(2026, 10, 1, 0, 0, 0))
+        ),
+    }
+
+    exit_code = stripe_payments.main(
+        ["summary", "--since", "2026-09-01", "--until", "2026-09-30"]
+    )
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == "统计范围 无记录\n"
+
+
+def test_summary_range_line_covers_only_the_totalled_window(
+    live_key, stripe_api, capsys
+):
+    """The range is the window's own earliest and latest totalled record."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            # Outside the window on both sides: neither may widen the range.
+            _range_intent(
+                "pi_before", 1000, "usd", _utc(2026, 8, 31, 23, 59, 59)
+            ),
+            _range_intent("pi_in_1", 1000, "usd", _utc(2026, 9, 5, 0, 0, 0)),
+            _range_intent("pi_after", 1000, "usd", _utc(2026, 10, 1, 0, 0, 0)),
+        ),
+        "/v1/refunds": _list_payload(
+            _range_refund("re_in", 100, "usd", _utc(2026, 9, 28, 23, 59, 59))
+        ),
+    }
+
+    assert (
+        stripe_payments.main(
+            ["summary", "--since", "2026-09-01", "--until", "2026-09-30"]
+        )
+        == 0
+    )
+    assert capsys.readouterr().out.splitlines()[0] == (
+        "统计范围 2026-09-05..2026-09-28"
+    )
+
+
+def test_summary_range_line_skips_non_succeeded_records(
+    live_key, stripe_api, capsys
+):
+    """Issue #318: a record the totals drop cannot widen the printed range."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _with_status(
+                _range_intent(
+                    "pi_canceled",
+                    9900,
+                    "usd",
+                    _utc(2026, 1, 1, 12, 0),
+                ),
+                "canceled",
+            ),
+            _range_intent("pi_ok", 1000, "usd", _utc(2026, 9, 10, 12, 0)),
+        ),
+        "/v1/refunds": _list_payload(
+            _with_status(
+                _range_refund(
+                    "re_failed",
+                    500,
+                    "usd",
+                    _utc(2026, 12, 31, 12, 0),
+                ),
+                "failed",
+            )
+        ),
+    }
+
+    assert stripe_payments.main(["summary"]) == 0
+    assert capsys.readouterr().out.splitlines()[0] == (
+        "统计范围 2026-09-10..2026-09-10"
+    )
+
+
+def test_summary_range_line_survives_the_currency_and_top_filters(
+    live_key, stripe_api, capsys
+):
+    """--currency/--top pick rows, not a different stretch of time."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _range_intent("pi_usd", 1000, "usd", _utc(2026, 9, 5, 12, 0)),
+            _range_intent("pi_eur", 2000, "eur", _utc(2026, 9, 15, 12, 0)),
+        ),
+        "/v1/refunds": _list_payload(
+            _range_refund("re_usd", 100, "usd", _utc(2026, 10, 20, 12, 0))
+        ),
+    }
+
+    for arguments in (
+        ["summary", "--currency", "usd"],
+        ["summary", "--currency", "usd", "--top", "1"],
+    ):
+        assert stripe_payments.main(arguments) == 0
+        printed = capsys.readouterr().out.splitlines()
+        assert printed[0] == SUMMARY_RANGE_SAMPLE_LINE
+        assert _summary_lines(printed) == ["USD 付款 10.00 退款 1.00 净额 9.00"]
+
+
+def test_summary_range_line_is_the_same_for_every_grouping(
+    live_key, stripe_by_month_lists, capsys
+):
+    """--by-month/--by-customer group the rows of one unchanged period."""
+    expected = "统计范围 2026-09-10..2026-10-31"
+
+    for arguments in (["summary", "--by-month"], ["summary", "--by-customer"]):
+        assert stripe_payments.main(arguments) == 0
+        assert capsys.readouterr().out.splitlines()[0] == expected
+
+
+def test_summary_quiet_prints_no_range_line(
+    live_key, stripe_range_lists, capsys
+):
+    """--quiet stays the documented net-only, one-value-per-line output."""
+    assert stripe_payments.main(["summary", "--quiet"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == ["USD 1,233.57"]
+
+
+def test_summary_csv_keeps_the_range_line_out_of_the_file(
+    live_key, stripe_range_lists, export_date, tmp_path, capsys
+):
+    """The CSV keeps one row per summary row, with no range row."""
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            ["summary", "--csv", "--output-dir", str(output_dir)]
+        )
+        == 0
+    )
+
+    printed = capsys.readouterr().out.splitlines()
+    assert printed[0] == SUMMARY_RANGE_SAMPLE_LINE
+    assert _summary_csv_rows(output_dir) == [
+        SUMMARY_CSV_HEADER,
+        ["USD", "1,234.57", "1.00", "1,233.57"],
+    ]
+    assert all(SUMMARY_RANGE_SAMPLE_LINE not in row for row in printed[1:])
