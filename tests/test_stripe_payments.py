@@ -4236,6 +4236,201 @@ def test_module_refunds_summary_rejects_bad_dates_before_any_stripe_call(
     assert not output_dir.exists()
 
 
+# --- refunds-summary --currency (Issue #320) ----------------------------
+#
+# Issue #320: `refunds-summary --currency usd` prints only that currency's
+# weekly refunds, the same single-value, case-insensitive, empty-rejected
+# option `summary --currency` already offers.  The acceptance data is one usd
+# refund of 0.50 in 2026-W40, one eur refund of 1.00 in 2026-W44 and two usd
+# refunds of 1.00 and 2.50 in 2026-W44.
+
+
+@pytest.fixture
+def stripe_refund_currency_weeks(stripe_api):
+    """The Issue #320 acceptance data: usd and eur refunds in two ISO weeks."""
+    stripe_api.list_payloads = {
+        "/v1/refunds": _list_payload(
+            _refund_on("re_usd_w40", 50, "usd", _utc(2026, 9, 28)),
+            _refund_on("re_eur_w44", 100, "eur", _utc(2026, 10, 28)),
+            _refund_on("re_usd_w44a", 100, "usd", _utc(2026, 10, 28)),
+            _refund_on("re_usd_w44b", 250, "usd", _utc(2026, 10, 30)),
+        )
+    }
+    return stripe_api
+
+
+REFUNDS_CURRENCY_USD_LINES = [
+    "2026-W40 usd 退款 1 笔 0.50",
+    "2026-W44 usd 退款 2 笔 3.50",
+]
+
+
+def test_cli_refunds_summary_currency_prints_only_that_currency_lines(
+    live_key, stripe_refund_currency_weeks, capsys
+):
+    """Acceptance 1: only the usd week lines, no eur line, exit code 0."""
+    exit_code = stripe_payments.main(["refunds-summary", "--currency", "usd"])
+
+    assert exit_code == 0
+    printed = capsys.readouterr().out.splitlines()
+    assert printed == REFUNDS_CURRENCY_USD_LINES
+    assert not any("eur" in line for line in printed)
+
+
+def test_cli_refunds_summary_currency_is_case_insensitive(
+    live_key, stripe_refund_currency_weeks, capsys
+):
+    """Acceptance: `--currency EUR` keeps Stripe's lowercase printed code."""
+    assert stripe_payments.main(["refunds-summary", "--currency", "EUR"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "2026-W44 eur 退款 1 笔 1.00"
+    ]
+
+
+def test_cli_refunds_summary_currency_without_refunds_prints_nothing(
+    live_key, stripe_refund_currency_weeks, capsys
+):
+    """Assumption: a currency with no refunds prints nothing and exits 0."""
+    assert stripe_payments.main(["refunds-summary", "--currency", "jpy"]) == 0
+
+    assert capsys.readouterr().out == ""
+    # The Refunds list is still read, like `summary --currency` reads its lists.
+    assert [request["path"] for request in stripe_refund_currency_weeks.requests] == [
+        "/v1/refunds"
+    ]
+
+
+@pytest.mark.parametrize("value", ["", " ", "\t\n"])
+def test_cli_refunds_summary_with_empty_currency_fails_before_any_stripe_call(
+    live_key,
+    stripe_refund_currency_weeks,
+    export_date,
+    tmp_path,
+    capsys,
+    value,
+):
+    """Acceptance 2: an empty value exits 2 before any request or CSV write."""
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "refunds-summary",
+            "--currency",
+            value,
+            "--csv",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert captured.err.strip() == (
+        f"error: --currency must not be empty, got {value!r}"
+    )
+    assert captured.out == ""
+    assert stripe_refund_currency_weeks.requests == []
+    assert not output_dir.exists()
+
+
+def test_refunds_summary_currency_filters_the_csv_rows_too(
+    live_key, stripe_refund_currency_weeks, export_date, tmp_path, capsys
+):
+    """Assumption: --csv mirrors the filtered terminal rows and the count."""
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            [
+                "refunds-summary",
+                "--currency",
+                "usd",
+                "--csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    assert capsys.readouterr().out.splitlines() == [
+        *REFUNDS_CURRENCY_USD_LINES,
+        _refunds_summary_hint(2, _refunds_summary_csv_file(output_dir)),
+    ]
+    assert _refunds_summary_csv_rows(output_dir) == [
+        REFUNDS_SUMMARY_CSV_HEADER,
+        ["2026-W40", "usd", "1", "0.50"],
+        ["2026-W44", "usd", "2", "3.50"],
+    ]
+
+
+def test_refunds_summary_help_describes_the_currency_option(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["refunds-summary", "--help"])
+
+    assert excinfo.value.code == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "--currency" in help_text
+    assert "only print this currency's weekly refunds" in help_text
+    assert "omitted, every currency is printed" in help_text
+
+
+def test_module_refunds_summary_currency_prints_only_that_currency(
+    local_stripe_server, tmp_path
+):
+    """The real user entry point: `python -m stripe_payments refunds-summary --currency usd`."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/refunds": _list_payload(
+            _refund_on("re_usd_w40", 50, "usd", _utc(2026, 9, 28)),
+            _refund_on("re_eur_w44", 100, "eur", _utc(2026, 10, 28)),
+            _refund_on("re_usd_w44a", 100, "usd", _utc(2026, 10, 28)),
+            _refund_on("re_usd_w44b", 250, "usd", _utc(2026, 10, 30)),
+        )
+    }
+
+    result = _run_module_command(
+        server, ["refunds-summary", "--currency", "usd"], tmp_path
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout.splitlines() == REFUNDS_CURRENCY_USD_LINES
+    assert [request["path"] for request in recorder.requests] == [
+        "/v1/refunds"
+    ]
+
+
+def test_module_refunds_summary_rejects_empty_currency_before_any_request(
+    local_stripe_server, tmp_path
+):
+    """Acceptance 2 at the real entry point: exit 2, no request, no file."""
+    recorder, server = local_stripe_server
+    output_dir = tmp_path / "export"
+
+    result = _run_module_command(
+        server,
+        [
+            "refunds-summary",
+            "--currency",
+            "",
+            "--csv",
+            "--output-dir",
+            str(output_dir),
+        ],
+        tmp_path,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert (
+        "error: --currency must not be empty, got ''" in result.stderr
+    )
+    assert recorder.requests == []
+    assert not output_dir.exists()
+
+
 # --- export --customer (Issue #223) -------------------------------------
 
 

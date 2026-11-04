@@ -610,6 +610,25 @@ usd 退款 1.00、2.50 时，完整输出就是这三行：
 2026-W44 usd 退款 2 笔 3.50
 ```
 
+只想看某一个币种的周退款时加 `--currency`（单值、不分大小写），同一份数据下
+`--currency usd` 只打印 usd 的两周行，`eur` 那行不出现：
+
+```sh
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments refunds-summary --currency usd
+```
+
+```
+2026-W40 usd 退款 1 笔 0.50
+2026-W44 usd 退款 2 笔 3.50
+```
+
+`--currency` 过滤的是打印出来的周行，所以加 `--csv` 时 CSV 也只有这些行、末行
+计数与终端一致；不传 `--currency` 时和以前一样列出全部币种。传空值
+（`--currency ''` 或全空白）时以退出码 2 结束并报
+`error: --currency must not be empty, got ''`，在发出任何 Stripe 请求、写任何 CSV
+文件之前就失败，传一个币种代码（例如 `usd`）后重跑即可；某个币种没有任何退款时
+不打印任何行，仍以退出码 0 结束。
+
 只想看某一段日期（按 UTC 整天）的退款时加 `--since` 和 `--until`：
 
 ```sh

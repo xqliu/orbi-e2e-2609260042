@@ -76,9 +76,10 @@ that talks to the Stripe API with the operator's live secret key.
   also writes those same rows to ``refunds-summary-<date>.csv`` (one column
   per printed value), so the weekly refunds land in a spreadsheet; omitted,
   the command only prints, as before.  ``--output-dir`` is the directory that
-  file is written into.  After the week rows one
-  ``exported refunds-summary rows=<n> to <path>`` line names that file, so the
-  operator reads where the CSV went (Issue #304).
+  file is written into.  ``--currency usd`` prints only that currency's week
+  rows (case-insensitive); omitted, every currency is printed.  After the
+  week rows one ``exported refunds-summary rows=<n> to <path>`` line names
+  that file, so the operator reads where the CSV went (Issue #304).
   ``--since 2026-09-01 --until 2026-09-30`` counts only the refunds created
   in that inclusive UTC day window instead, so one calendar month of refunds
   reconciles in one command (Issue #313); either date works alone, a
@@ -1275,6 +1276,14 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     refunds_summary.add_argument(
+        "--currency",
+        default=None,
+        help=(
+            "only print this currency's weekly refunds (e.g. usd, "
+            "case-insensitive); omitted, every currency is printed"
+        ),
+    )
+    refunds_summary.add_argument(
         "--since",
         default=None,
         metavar=SUMMARY_DATE_FORMAT,
@@ -1548,6 +1557,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print(f"exported summary rows={len(rows)} to {path}")
             return 0
         if args.command == "refunds-summary":
+            # Issue #320: the same single-value, case-insensitive
+            # `--currency` as `summary`, rejected before any Refunds request
+            # or CSV write when it is empty.
+            currency_filter = None
+            if args.currency is not None:
+                currency_filter = args.currency.strip().lower()
+                if not currency_filter:
+                    raise ConfigurationError(
+                        f"--currency must not be empty, got {args.currency!r}"
+                    )
             # Issue #313: the same UTC day window as `summary --since/--until`,
             # validated before any Refunds request or CSV write; the inclusive
             # `created[lte]` edge is the last second of the `--until` day
@@ -1559,6 +1578,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             rows = []
             for week, currency in sorted(refund_totals):
+                if currency_filter is not None and currency != currency_filter:
+                    continue
                 count, amount = refund_totals[(week, currency)]
                 print(_refund_week_line(week, currency, count, amount))
                 rows.append(_refund_week_row(week, currency, count, amount))

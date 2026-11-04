@@ -102,6 +102,13 @@
   下推，加 `--csv` 时 CSV 也只有窗口内的行；两个参数可只传一个；日期非法或
   `--since` 晚于 `--until` 时以退出码 2 结束且不调用 Stripe、不写 CSV；不传时输出与
   以前完全一致。
+- `refunds-summary` 子命令新增 `--currency usd`：只打印该币种的周退款行（单值、
+  不分大小写，标签仍是 Stripe 返回的小写币种），例如
+  `refunds-summary --currency usd` 只输出 usd 的周行；过滤同时作用于 `--csv`，
+  所以 CSV 的数据行和末行计数只含这些行；某个币种没有退款时不打印任何行、仍以
+  退出码 0 结束；传空值（`--currency ''` 或全空白）时以退出码 2 结束并报
+  `error: --currency must not be empty, got ''`，且不调用 Stripe、不写 CSV；不传时
+  输出与以前完全一致。
 
 ### 变更
 
