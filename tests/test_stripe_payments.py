@@ -7028,3 +7028,219 @@ def test_module_export_since_until_rejects_a_bad_date_without_writing(
     )
     assert result.stdout == ""
     assert not output_dir.exists()
+
+
+# --- summary counts only succeeded records (Issue #318) ------------------
+
+# The acceptance account of Issue #318: one succeeded usd payment and one
+# succeeded usd refund, plus a canceled usd payment and a failed usd refund
+# that must not reach any summary line, count or CSV row.
+SUCCEEDED_ONLY_LINES = [
+    "USD 付款 10.00 退款 1.00 净额 9.00",
+    "合计 付款 10.00 退款 1.00 净额 9.00",
+    "总笔数 2",
+    "平均金额 4.50",
+    "最大单笔金额 10.00",
+    "最小单笔金额 1.00",
+    "记录 2 条",
+]
+# The records sit inside the last 30 days of the pinned summary clock, so the
+# --days variant sees the same two succeeded records.
+SUCCEEDED_ONLY_CREATED = DAYS_NOW - 24 * 60 * 60
+
+
+def _with_status(record, status):
+    """The same Stripe record with another status."""
+    return {**record, "status": status}
+
+
+def _succeeded_only_payments():
+    return (
+        _by_month_intent(
+            "pi_ok",
+            1000,
+            "usd",
+            SUCCEEDED_ONLY_CREATED,
+            customer="cus_alpha",
+        ),
+        _with_status(
+            _by_month_intent(
+                "pi_canceled", 9900, "usd", SUCCEEDED_ONLY_CREATED
+            ),
+            "canceled",
+        ),
+    )
+
+
+def _succeeded_only_refunds():
+    return (
+        _by_month_refund(
+            "re_ok",
+            100,
+            "usd",
+            SUCCEEDED_ONLY_CREATED,
+            payment_intent="pi_ok",
+        ),
+        _with_status(
+            _by_month_refund(
+                "re_failed",
+                500,
+                "usd",
+                SUCCEEDED_ONLY_CREATED,
+                payment_intent="pi_ok",
+            ),
+            "failed",
+        ),
+    )
+
+
+@pytest.fixture
+def stripe_succeeded_only_lists(stripe_api):
+    """The Issue #318 account, as the summary command reads it."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(*_succeeded_only_payments()),
+        "/v1/refunds": _list_payload(*_succeeded_only_refunds()),
+    }
+    return stripe_api
+
+
+def test_cli_summary_totals_only_succeeded_records(
+    live_key, stripe_succeeded_only_lists, capsys
+):
+    """Issue #318 Acceptance: the canceled payment and failed refund vanish."""
+    exit_code = stripe_payments.main(["summary"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines() == SUCCEEDED_ONLY_LINES
+
+
+def test_module_summary_totals_only_succeeded_records(
+    local_stripe_server, tmp_path
+):
+    """The real user entry point: ``python -m stripe_payments summary``."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/payment_intents": _list_payload(*_succeeded_only_payments()),
+        "/v1/refunds": _list_payload(*_succeeded_only_refunds()),
+    }
+
+    result = _run_module_command(server, ["summary"], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout.splitlines() == SUCCEEDED_ONLY_LINES
+
+
+def test_summary_skips_non_succeeded_records_on_every_page(
+    live_key, stripe_api, capsys
+):
+    """Issue #318 assumption: every page is filtered, not only the first."""
+    stripe_api.list_pages = {
+        "/v1/payment_intents": {
+            # The canceled payment is on the first page, the succeeded one on
+            # the second: the filter has to keep reading past page one.
+            None: _list_payload(_succeeded_only_payments()[1], has_more=True),
+            "pi_canceled": _list_payload(_succeeded_only_payments()[0]),
+        },
+        "/v1/refunds": {
+            # The failed refund is on the first page, the succeeded one next.
+            None: _list_payload(_succeeded_only_refunds()[1], has_more=True),
+            "re_failed": _list_payload(_succeeded_only_refunds()[0]),
+        },
+    }
+
+    assert stripe_payments.main(["summary"]) == 0
+    assert capsys.readouterr().out.splitlines() == SUCCEEDED_ONLY_LINES
+
+
+def test_summary_csv_rows_skip_non_succeeded_records(
+    live_key, stripe_succeeded_only_lists, export_date, tmp_path
+):
+    """Issue #318 Acceptance: the CSV carries only the succeeded records."""
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            ["summary", "--csv", "--output-dir", str(output_dir)]
+        )
+        == 0
+    )
+    assert _summary_csv_rows(output_dir) == [
+        SUMMARY_CSV_HEADER,
+        ["USD", "10.00", "1.00", "9.00"],
+    ]
+
+
+def test_summary_by_month_skips_non_succeeded_records(
+    live_key, stripe_succeeded_only_lists, capsys
+):
+    """Issue #318: ``--by-month`` shows only the succeeded month row."""
+    assert stripe_payments.main(["summary", "--by-month"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "2026-10 USD 付款 10.00 退款 1.00 净额 9.00",
+        *SUCCEEDED_ONLY_LINES[1:],
+    ]
+
+
+def test_summary_by_customer_skips_non_succeeded_records(
+    live_key, stripe_succeeded_only_lists, capsys
+):
+    """Issue #318: ``--by-customer`` has no group for the skipped records."""
+    assert stripe_payments.main(["summary", "--by-customer"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "cus_alpha USD 付款 10.00 退款 1.00 净额 9.00",
+        *SUCCEEDED_ONLY_LINES[1:],
+    ]
+
+
+def test_summary_quiet_skips_non_succeeded_records(
+    live_key, stripe_succeeded_only_lists, capsys
+):
+    """Issue #318 Acceptance: ``--quiet`` prints ``USD 9.00``."""
+    assert stripe_payments.main(["summary", "--quiet"]) == 0
+    assert capsys.readouterr().out.splitlines() == ["USD 9.00"]
+
+
+def test_summary_top_skips_non_succeeded_records(
+    live_key, stripe_succeeded_only_lists, capsys
+):
+    """Issue #318: ``--top 1`` ranks the succeeded net only."""
+    assert stripe_payments.main(["summary", "--top", "1"]) == 0
+    assert capsys.readouterr().out.splitlines() == SUCCEEDED_ONLY_LINES
+
+
+def test_summary_days_skips_non_succeeded_records(
+    live_key, summary_days_clock, stripe_succeeded_only_lists, capsys
+):
+    """Issue #318: ``--days 30`` counts only the succeeded records."""
+    assert stripe_payments.main(["summary", "--days", "30"]) == 0
+    assert capsys.readouterr().out.splitlines() == SUCCEEDED_ONLY_LINES
+    # The window filter is still pushed down to Stripe.
+    assert [
+        request["form"]["created[gte]"]
+        for request in stripe_succeeded_only_lists.requests
+    ] == [[str(DAYS_30_CUTOFF)], [str(DAYS_30_CUTOFF)]]
+
+
+def test_refunds_summary_still_counts_every_refund_status(
+    live_key, stripe_api, capsys
+):
+    """Issue #318 assumption: ``refunds-summary`` keeps its whole scope."""
+    stripe_api.list_payloads = {
+        "/v1/refunds": _list_payload(
+            _refund_on("re_ok", 1000, "usd", _utc(2026, 10, 28)),
+            _with_status(
+                _refund_on("re_pending", 100, "usd", _utc(2026, 10, 28)),
+                "pending",
+            ),
+            _with_status(
+                _refund_on("re_failed", 500, "usd", _utc(2026, 10, 28)),
+                "failed",
+            ),
+        ),
+    }
+
+    assert stripe_payments.main(["refunds-summary"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "2026-W44 usd 退款 3 笔 16.00",
+    ]
