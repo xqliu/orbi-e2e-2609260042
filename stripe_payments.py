@@ -84,11 +84,14 @@ that talks to the Stripe API with the operator's live secret key.
   rows one ``合计 退款 <n> 笔 <amount>`` line adds up their counts and printed
   amounts (Issue #319), so a run reads the account total without summing the
   rows by hand; with no refunds there are no rows and no total line.
-  ``--csv`` also writes those same rows to ``refunds-summary-<date>.csv``
-  (one column per printed value), so the weekly refunds land in a
-  spreadsheet; omitted, the command only prints, as before.  ``--output-dir``
-  is the directory that file is written into.  After the week rows and the
-  total line one ``exported refunds-summary rows=<n> to <path>`` line names
+  ``--currency usd`` prints only that currency's week rows
+  (case-insensitive) and no ``合计`` line, those rows being the whole
+  filtered output; omitted, every currency is printed.  ``--csv`` also writes
+  those same rows to ``refunds-summary-<date>.csv`` (one column per printed
+  value), so the weekly refunds land in a spreadsheet; omitted, the command
+  only prints, as before.  ``--output-dir`` is the directory that file is
+  written into.  After the week rows one
+  ``exported refunds-summary rows=<n> to <path>`` line names
   that file, so the operator reads where the CSV went (Issue #304).
   ``--since 2026-09-01 --until 2026-09-30`` counts only the refunds created
   in that inclusive UTC day window instead, so one calendar month of refunds
@@ -1364,6 +1367,14 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     refunds_summary.add_argument(
+        "--currency",
+        default=None,
+        help=(
+            "only print this currency's weekly refunds (e.g. usd, "
+            "case-insensitive); omitted, every currency is printed"
+        ),
+    )
+    refunds_summary.add_argument(
         "--since",
         default=None,
         metavar=SUMMARY_DATE_FORMAT,
@@ -1644,6 +1655,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print(f"exported summary rows={len(rows)} to {path}")
             return 0
         if args.command == "refunds-summary":
+            # Issue #320: the same single-value, case-insensitive
+            # `--currency` as `summary`, rejected before any Refunds request
+            # or CSV write when it is empty.
+            currency_filter = None
+            if args.currency is not None:
+                currency_filter = args.currency.strip().lower()
+                if not currency_filter:
+                    raise ConfigurationError(
+                        f"--currency must not be empty, got {args.currency!r}"
+                    )
             # Issue #313: the same UTC day window as `summary --since/--until`,
             # validated before any Refunds request or CSV write; the inclusive
             # `created[lte]` edge is the last second of the `--until` day
@@ -1657,6 +1678,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             total_count = 0
             total_amount = 0
             for week, currency in sorted(refund_totals):
+                if currency_filter is not None and currency != currency_filter:
+                    continue
                 count, amount = refund_totals[(week, currency)]
                 print(_refund_week_line(week, currency, count, amount))
                 rows.append(_refund_week_row(week, currency, count, amount))
@@ -1664,7 +1687,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 total_amount += _summary_hundredths(amount, currency)
             # Issue #319: one last line adds up every printed week row; with
             # no refunds there are no rows and thus no total line either.
-            if rows:
+            # Issue #320: a `--currency` run prints only that currency's week
+            # rows, so it prints no all-currency total line.
+            if rows and currency_filter is None:
                 print(_refund_total_line(total_count, total_amount))
             # Issue #299: the same printed rows also land in a dated CSV file;
             # the terminal output above stays exactly what it was without --csv.
