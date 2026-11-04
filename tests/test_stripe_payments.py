@@ -3484,6 +3484,54 @@ def test_cli_refunds_summary_prints_one_line_per_week_and_currency(
         "2026-W40 usd 退款 1 笔 9.00",
         "2026-W44 eur 退款 1 笔 5.00",
         "2026-W44 usd 退款 2 笔 3.50",
+        # Issue #319: the closing line adds up every printed row above it.
+        "合计 退款 4 笔 17.50",
+    ]
+
+
+def test_cli_refunds_summary_closes_with_the_total_of_the_printed_rows(
+    live_key, stripe_api, capsys
+):
+    """Issue #319 Acceptance: the last line adds up every printed week row."""
+    stripe_api.list_payloads = {
+        "/v1/refunds": _list_payload(
+            _refund_on("re_1", 100, "usd", _utc(2026, 10, 28)),
+            _refund_on("re_2", 250, "usd", _utc(2026, 10, 30)),
+            _refund_on("re_3", 100, "eur", _utc(2026, 10, 28)),
+            _refund_on("re_4", 50, "usd", _utc(2026, 9, 28)),
+        )
+    }
+
+    assert stripe_payments.main(["refunds-summary"]) == 0
+
+    # Three week/currency rows as before, then one total row: the count and
+    # the hundredths of every printed amount above it.
+    assert capsys.readouterr().out.splitlines() == [
+        "2026-W40 usd 退款 1 笔 0.50",
+        "2026-W44 eur 退款 1 笔 1.00",
+        "2026-W44 usd 退款 2 笔 3.50",
+        "合计 退款 4 笔 5.00",
+    ]
+
+
+def test_refunds_summary_total_converts_zero_decimal_amounts(
+    live_key, stripe_api, capsys
+):
+    """Acceptance: 500 JPY counts as 500.00 in the shared hundredths unit."""
+    stripe_api.list_payloads = {
+        "/v1/refunds": _list_payload(
+            _refund_on("re_1", 500, "jpy", _utc(2026, 11, 1)),
+            _refund_on("re_2", 250, "usd", _utc(2026, 11, 2)),
+        )
+    }
+
+    assert stripe_payments.main(["refunds-summary"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "2026-W44 jpy 退款 1 笔 500",
+        "2026-W45 usd 退款 1 笔 2.50",
+        # 500 JPY is printed as the integer 500, i.e. 50,000 hundredths.
+        "合计 退款 2 笔 502.50",
     ]
 
 
@@ -3520,10 +3568,11 @@ def test_refunds_summary_week_rows_add_up_to_every_refund(
     }
 
     assert stripe_payments.main(["refunds-summary"]) == 0
-    parsed = [
-        _parse_refund_week_line(line)
-        for line in capsys.readouterr().out.splitlines()
-    ]
+    lines = capsys.readouterr().out.splitlines()
+    # Issue #319: the last line totals the week rows; the rows themselves are
+    # still one per week and currency.
+    assert lines[-1] == "合计 退款 5 笔 18.75"
+    parsed = [_parse_refund_week_line(line) for line in lines[:-1]]
 
     # Four week/currency rows: 2026-W40 usd, 2026-W44 eur, 2026-W44 usd and
     # 2026-W45 usd.  Every row is exactly one week, and no refund is dropped.
@@ -3571,6 +3620,7 @@ def test_refunds_summary_totals_every_page(live_key, stripe_api, capsys):
     assert stripe_payments.main(["refunds-summary"]) == 0
     assert capsys.readouterr().out.splitlines() == [
         "2026-W40 usd 退款 2 笔 3.50",
+        "合计 退款 2 笔 3.50",
     ]
 
 
@@ -3591,6 +3641,8 @@ def test_refunds_summary_uses_the_utc_iso_week_and_documented_amounts(
         # 500 JPY is 500 (zero-decimal), not 5.00.
         "2026-W44 jpy 退款 1 笔 500",
         "2026-W45 usd 退款 1 笔 1.00",
+        # 500 JPY is 50,000 hundredths, so the total is 500.00 + 1.00.
+        "合计 退款 2 笔 501.00",
     ]
 
 
@@ -3612,6 +3664,7 @@ def test_refunds_summary_uses_the_iso_week_year_across_a_year_boundary(
     assert capsys.readouterr().out.splitlines() == [
         "2026-W53 usd 退款 2 笔 3.50",
         "2027-W01 usd 退款 1 笔 5.00",
+        "合计 退款 3 笔 8.50",
     ]
 
 
@@ -3655,6 +3708,8 @@ REFUNDS_SUMMARY_SAMPLE_LINES = [
     "2026-W44 eur 退款 1 笔 5.00",
     "2026-W44 usd 退款 2 笔 3.50",
 ]
+# Issue #319: the closing line totals the three week rows above it.
+REFUNDS_SUMMARY_SAMPLE_TOTAL_LINE = "合计 退款 4 笔 17.50"
 
 
 def _refunds_summary_csv_file(output_dir, date=EXPORT_DATE):
@@ -3693,6 +3748,7 @@ def test_cli_refunds_summary_csv_writes_a_dated_file_and_names_it(
     # written file follows them.
     assert capsys.readouterr().out.splitlines() == [
         *REFUNDS_SUMMARY_SAMPLE_LINES,
+        REFUNDS_SUMMARY_SAMPLE_TOTAL_LINE,
         _refunds_summary_hint(3, csv_file),
     ]
     # Nothing else lands in the directory: just the dated CSV.
@@ -3728,11 +3784,14 @@ def test_refunds_summary_csv_rows_equal_the_printed_lines(
     )
 
     printed = capsys.readouterr().out.splitlines()
-    # The last printed line names the file; the lines before it are the rows.
+    # The last printed line names the file and the one before it totals the
+    # rows; the lines before those two are the CSV rows.
     assert printed[-1] == _refunds_summary_hint(
-        len(printed) - 1, _refunds_summary_csv_file(output_dir)
+        len(printed) - 2, _refunds_summary_csv_file(output_dir)
     )
-    week_lines = printed[:-1]
+    # 9.00 usd + 500.00 jpy + 2.50 usd, in printed hundredths.
+    assert printed[-2] == "合计 退款 3 笔 511.50"
+    week_lines = printed[:-2]
     rows = _refunds_summary_csv_rows(output_dir)
     header, data_rows = rows[0], rows[1:]
     assert header == REFUNDS_SUMMARY_CSV_HEADER
@@ -3771,6 +3830,7 @@ def test_refunds_summary_csv_quotes_thousands_separators(
     assert capsys.readouterr().out.splitlines() == [
         "2026-W44 eur 退款 1 笔 3.50",
         "2026-W44 usd 退款 1 笔 1,234.57",
+        "合计 退款 2 笔 1,238.07",
         _refunds_summary_hint(2, _refunds_summary_csv_file(output_dir)),
     ]
     text = _refunds_summary_csv_file(output_dir).read_text(encoding="utf-8")
@@ -3806,7 +3866,10 @@ def test_refunds_summary_csv_defaults_to_the_export_directory(
     assert printed[-1] == _refunds_summary_hint(
         3, Path(stripe_payments.DEFAULT_OUTPUT_DIR) / csv_file.name
     )
-    assert printed[:-1] == REFUNDS_SUMMARY_SAMPLE_LINES
+    assert printed[:-1] == [
+        *REFUNDS_SUMMARY_SAMPLE_LINES,
+        REFUNDS_SUMMARY_SAMPLE_TOTAL_LINE,
+    ]
     assert _refunds_summary_csv_rows(default_dir) == [
         REFUNDS_SUMMARY_CSV_HEADER,
         ["2026-W40", "usd", "1", "9.00"],
@@ -3850,7 +3913,10 @@ def test_refunds_summary_without_the_csv_option_writes_no_file(
         == 0
     )
 
-    assert capsys.readouterr().out.splitlines() == REFUNDS_SUMMARY_SAMPLE_LINES
+    assert capsys.readouterr().out.splitlines() == [
+        *REFUNDS_SUMMARY_SAMPLE_LINES,
+        REFUNDS_SUMMARY_SAMPLE_TOTAL_LINE,
+    ]
     assert not output_dir.exists()
 
 
@@ -3907,6 +3973,7 @@ def test_module_refunds_summary_csv_writes_the_documented_rows(
     assert result.stdout.splitlines() == [
         "2026-W44 eur 退款 1 笔 5.00",
         "2026-W44 usd 退款 2 笔 3.50",
+        "合计 退款 3 笔 8.50",
         f"exported refunds-summary rows=2 to {csv_file}",
     ]
     with csv_file.open(newline="", encoding="utf-8") as handle:
@@ -3987,6 +4054,8 @@ REFUNDS_WINDOW_SAMPLE_LINES = [
     # The eur refund exactly on the upper edge, in ISO week 40.
     "2026-W40 eur 退款 1 笔 1.00",
 ]
+# Issue #319: the closing line totals the three window rows above it.
+REFUNDS_WINDOW_SAMPLE_TOTAL_LINE = "合计 退款 3 笔 2.25"
 
 
 def test_cli_refunds_summary_since_until_prints_only_the_window_rows(
@@ -4004,7 +4073,10 @@ def test_cli_refunds_summary_since_until_prints_only_the_window_rows(
     )
 
     assert exit_code == 0
-    assert capsys.readouterr().out.splitlines() == REFUNDS_WINDOW_SAMPLE_LINES
+    assert capsys.readouterr().out.splitlines() == [
+        *REFUNDS_WINDOW_SAMPLE_LINES,
+        REFUNDS_WINDOW_SAMPLE_TOTAL_LINE,
+    ]
 
 
 def test_refunds_summary_since_until_sends_the_documented_created_filters(
@@ -4097,6 +4169,7 @@ def test_refunds_summary_since_until_csv_writes_only_the_window_rows(
 
     assert capsys.readouterr().out.splitlines() == [
         *REFUNDS_WINDOW_SAMPLE_LINES,
+        REFUNDS_WINDOW_SAMPLE_TOTAL_LINE,
         _refunds_summary_hint(3, _refunds_summary_csv_file(output_dir)),
     ]
     assert _refunds_summary_csv_rows(output_dir) == [
@@ -4188,7 +4261,10 @@ def test_module_refunds_summary_since_until_totals_the_window(
 
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
-    assert result.stdout.splitlines() == ["2026-W40 eur 退款 1 笔 1.00"]
+    assert result.stdout.splitlines() == [
+        "2026-W40 eur 退款 1 笔 1.00",
+        "合计 退款 1 笔 1.00",
+    ]
     assert [request["path"] for request in recorder.requests] == [
         "/v1/refunds"
     ]
@@ -5679,13 +5755,43 @@ MONTH_LABEL_RE = re.compile(r"^\d{4}-\d{2} ")
 
 
 def _assert_week_lines_only(lines):
-    """Every printed line starts with an ISO week label, never a month one."""
+    """Every week row starts with an ISO week label, never a month one."""
     assert lines, "refunds-summary printed no line"
-    for line in lines:
+    # Issue #319: the last line totals the week rows above it.
+    week_lines = lines[:-1]
+    assert lines[-1].startswith("合计 退款 "), lines[-1]
+    assert week_lines, "refunds-summary printed no week row"
+    for line in week_lines:
         assert not MONTH_LABEL_RE.match(line), (
             f"the previous calendar-month statistic is still printed: {line!r}"
         )
         _parse_refund_week_line(line)
+
+
+def test_module_refunds_summary_closes_with_the_documented_total(
+    local_stripe_server, tmp_path
+):
+    """Issue #319 Acceptance: the four documented lines at the real command."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/refunds": _list_payload(
+            _refund_on("re_1", 50, "usd", _utc(2026, 9, 28)),
+            _refund_on("re_2", 100, "eur", _utc(2026, 10, 28)),
+            _refund_on("re_3", 100, "usd", _utc(2026, 10, 28)),
+            _refund_on("re_4", 250, "usd", _utc(2026, 10, 30)),
+        )
+    }
+
+    result = _run_module_command(server, ["refunds-summary"], tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout.splitlines() == [
+        "2026-W40 usd 退款 1 笔 0.50",
+        "2026-W44 eur 退款 1 笔 1.00",
+        "2026-W44 usd 退款 2 笔 3.50",
+        "合计 退款 4 笔 5.00",
+    ]
 
 
 def test_module_refunds_summary_groups_the_refunds_by_iso_week(
@@ -5723,11 +5829,12 @@ def test_module_refunds_summary_groups_the_refunds_by_iso_week(
         "2026-W44 eur 退款 1 笔 5.00",
         "2026-W44 usd 退款 2 笔 3.50",
         "2026-W45 usd 退款 1 笔 0.50",
+        "合计 退款 6 笔 19.50",
     ]
     _assert_week_lines_only(lines)
 
     # The week rows cover every refund, so no record is lost by the change.
-    parsed = [_parse_refund_week_line(line) for line in lines]
+    parsed = [_parse_refund_week_line(line) for line in lines[:-1]]
     assert sum(count for _, _, count, _ in parsed) == 6
     totals = {}
     for _, currency, _, amount in parsed:
@@ -5770,10 +5877,11 @@ def test_module_refunds_summary_uses_the_iso_week_year_across_a_year_boundary(
     assert lines == [
         "2026-W53 usd 退款 2 笔 3.50",
         "2027-W01 usd 退款 1 笔 5.00",
+        "合计 退款 3 笔 8.50",
     ]
     _assert_week_lines_only(lines)
 
-    parsed = [_parse_refund_week_line(line) for line in lines]
+    parsed = [_parse_refund_week_line(line) for line in lines[:-1]]
     assert sum(count for _, _, count, _ in parsed) == 3
     assert round(sum(amount for _, _, _, amount in parsed), 2) == 8.50
 
@@ -7243,4 +7351,7 @@ def test_refunds_summary_still_counts_every_refund_status(
     assert stripe_payments.main(["refunds-summary"]) == 0
     assert capsys.readouterr().out.splitlines() == [
         "2026-W44 usd 退款 3 笔 16.00",
+        # Issue #319: the closing line totals the printed rows; the scope is
+        # still every refund status, so all three records stay counted.
+        "合计 退款 3 笔 16.00",
     ]

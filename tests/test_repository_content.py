@@ -949,12 +949,23 @@ def test_readme_documents_the_refunds_summary_usage_next_to_export_and_summary()
 
 
 def test_readme_shows_the_complete_refunds_summary_output():
-    """Issue #225: the section shows the complete output, in the real order."""
+    """Issue #225/#319: the complete output, week rows then the total row."""
     body = _readme_subsection(README_REFUNDS_SUMMARY_HEADING)
-    expected = "\n".join(
+    lines = [
         stripe_payments._refund_week_line(week, currency, count, amount)
         for week, currency, count, amount in REFUNDS_SUMMARY_SAMPLE_DATA
+    ]
+    # Issue #319: the last line totals exactly the week rows above it.
+    lines.append(
+        stripe_payments._refund_total_line(
+            sum(count for _, _, count, _ in REFUNDS_SUMMARY_SAMPLE_DATA),
+            sum(
+                stripe_payments._summary_hundredths(amount, currency)
+                for _, currency, _, amount in REFUNDS_SUMMARY_SAMPLE_DATA
+            ),
+        )
     )
+    expected = "\n".join(lines)
     # The whole block is documented verbatim, so the reader sees every line in
     # the documented (week, currency) sort order instead of a single sample.
     assert expected in body, (
@@ -1010,10 +1021,23 @@ def test_readme_documents_the_refunds_summary_day_window():
         f"the {README_REFUNDS_SUMMARY_HEADING!r} section must show "
         f"{command!r}"
     )
-    expected = "\n".join(
+    lines = [
         stripe_payments._refund_week_line(week, currency, count, amount)
         for week, currency, count, amount in REFUNDS_SUMMARY_WINDOW_SAMPLE_DATA
+    ]
+    lines.append(
+        stripe_payments._refund_total_line(
+            sum(
+                count
+                for _, _, count, _ in REFUNDS_SUMMARY_WINDOW_SAMPLE_DATA
+            ),
+            sum(
+                stripe_payments._summary_hundredths(amount, currency)
+                for _, currency, _, amount in REFUNDS_SUMMARY_WINDOW_SAMPLE_DATA
+            ),
+        )
     )
+    expected = "\n".join(lines)
     assert expected in body, (
         f"the {README_REFUNDS_SUMMARY_HEADING!r} section must show the "
         f"complete window output, expected:\n{expected}"

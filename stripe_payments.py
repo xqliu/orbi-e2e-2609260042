@@ -72,13 +72,16 @@ that talks to the Stripe API with the operator's live secret key.
   amount per ISO week and currency, one line per week and currency, so the
   refunds of a week can be read without filtering the exported CSV files.
   The week comes from the refund's ``created`` timestamp in UTC and is the
-  ISO 8601 week (Monday to Sunday), labelled like ``2026-W44``.  ``--csv``
-  also writes those same rows to ``refunds-summary-<date>.csv`` (one column
-  per printed value), so the weekly refunds land in a spreadsheet; omitted,
-  the command only prints, as before.  ``--output-dir`` is the directory that
-  file is written into.  After the week rows one
-  ``exported refunds-summary rows=<n> to <path>`` line names that file, so the
-  operator reads where the CSV went (Issue #304).
+  ISO 8601 week (Monday to Sunday), labelled like ``2026-W44``.  After the week
+  rows one ``合计 退款 <n> 笔 <amount>`` line adds up their counts and printed
+  amounts (Issue #319), so a run reads the account total without summing the
+  rows by hand; with no refunds there are no rows and no total line.
+  ``--csv`` also writes those same rows to ``refunds-summary-<date>.csv``
+  (one column per printed value), so the weekly refunds land in a
+  spreadsheet; omitted, the command only prints, as before.  ``--output-dir``
+  is the directory that file is written into.  After the week rows and the
+  total line one ``exported refunds-summary rows=<n> to <path>`` line names
+  that file, so the operator reads where the CSV went (Issue #304).
   ``--since 2026-09-01 --until 2026-09-30`` counts only the refunds created
   in that inclusive UTC day window instead, so one calendar month of refunds
   reconciles in one command (Issue #313); either date works alone, a
@@ -783,6 +786,19 @@ def _refund_week_line(week: str, currency: str, count: int, amount: int) -> str:
     return (
         f"{row['week']} {row['currency']} 退款 {row['count']} 笔 "
         f"{row['amount']}"
+    )
+
+
+def _refund_total_line(count: int, amount: int) -> str:
+    """The all-week total line, e.g. ``合计 退款 4 笔 5.00``.
+
+    ``count`` is every refund the printed week rows count and ``amount`` their
+    printed values added up in hundredths (``_summary_hundredths()``), so the
+    line is exactly the sum of the rows above it (Issue #319).
+    """
+    return (
+        f"{SUMMARY_TOTAL_LABEL} 退款 {count} 笔 "
+        f"{_format_hundredths(amount)}"
     )
 
 
@@ -1558,10 +1574,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 since=since, until=until
             )
             rows = []
+            total_count = 0
+            total_amount = 0
             for week, currency in sorted(refund_totals):
                 count, amount = refund_totals[(week, currency)]
                 print(_refund_week_line(week, currency, count, amount))
                 rows.append(_refund_week_row(week, currency, count, amount))
+                total_count += count
+                total_amount += _summary_hundredths(amount, currency)
+            # Issue #319: one last line adds up every printed week row; with
+            # no refunds there are no rows and thus no total line either.
+            if rows:
+                print(_refund_total_line(total_count, total_amount))
             # Issue #299: the same printed rows also land in a dated CSV file;
             # the terminal output above stays exactly what it was without --csv.
             # Issue #304: after the week rows one line says which file they went
