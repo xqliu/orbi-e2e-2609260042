@@ -594,13 +594,18 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments refunds-summary
 
 默认只打印、不写文件，统计账户里的全部退款。每周每个币种一行（先按周、再按币种代码
 排序），例如 ISO 第 40 周有一笔 usd 退款 0.50、第 44 周有一笔 eur 退款 1.00 和两笔
-usd 退款 1.00、2.50 时，完整输出就是这三行：
+usd 退款 1.00、2.50 时，完整输出就是这四行（最后一行是上面各周行的合计）：
 
 ```
 2026-W40 usd 退款 1 笔 0.50
 2026-W44 eur 退款 1 笔 1.00
 2026-W44 usd 退款 2 笔 3.50
+合计 退款 4 笔 5.00
 ```
+
+合计行把上面每个打印值按 `summary` 的 `合计` 行同样的单位相加（两位小数币种
+按原值，JPY、KRW 等零小数币种先换算成两位小数），给出这次打印的全部退款笔数和
+金额；跨币种时也合成一行，不按币种拆分。
 
 只想看某一段日期（按 UTC 整天）的退款时加 `--since` 和 `--until`：
 
@@ -620,10 +625,11 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments refunds-summary --s
 
 ```
 2026-W40 eur 退款 1 笔 1.00
+合计 退款 1 笔 1.00
 ```
 
 加 `--csv` 时 CSV 也只有窗口内的行：同一份数据下上一条命令的 CSV 只有表头
-`周,币种,退款笔数,退款金额` 和下面这一行，终端在退款行之后多打印
+`周,币种,退款笔数,退款金额` 和下面这一行，终端在退款行和合计行之后多打印
 `exported refunds-summary rows=1 to export/refunds-summary-2026-10-28.csv`：
 
 ```
@@ -644,6 +650,7 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments refunds-summary --c
 2026-W40 usd 退款 1 笔 0.50
 2026-W44 eur 退款 1 笔 1.00
 2026-W44 usd 退款 2 笔 3.50
+合计 退款 4 笔 5.00
 exported refunds-summary rows=3 to export/refunds-summary-2026-10-28.csv
 ```
 
@@ -652,7 +659,7 @@ exported refunds-summary rows=3 to export/refunds-summary-2026-10-28.csv
 日期是导出当天的 UTC 日期（`refunds-summary-<YYYY-MM-DD>.csv`）。CSV 第一行是中文
 表头 `周,币种,退款笔数,退款金额`，之后每周每个币种一行，顺序与终端打印顺序一致；
 金额带千分位逗号时自动加引号（`3.50` 不加引号，`1,234.57` 写成 `"1,234.57"`），
-Excel 不会把它拆成两列：
+Excel 不会把它拆成两列（合计行只打印到终端，不写进 CSV 文件）：
 
 ```
 周,币种,退款笔数,退款金额
@@ -665,12 +672,12 @@ Excel 不会把它拆成两列：
 
 周取退款记录 `created` 时间戳的 UTC 所在 ISO 8601 周（周一至周日，用 Python 标准库
 `datetime.isocalendar()` 计算），标签形如 `2026-W44`；跨年时用 ISO 周年份，所以每笔
-退款只会落在一行里，所有行的笔数和金额加起来就是账户的全部退款。币种保持 Stripe
-返回的小写代码；金额按与 `summary` 相同的最小货币单位规则换算（两位小数币种除以
-100，JPY、KRW 等零小数币种按文档原样打印，见
-<https://docs.stripe.com/currencies>）。账户没有退款记录时不打印任何退款行；此时加
-`--csv` 的 CSV 只有表头一行，终端也只有 `exported refunds-summary rows=0 to ...`
-这一行提示。
+退款只会落在一行里，所有行（以及最后一行的合计）的笔数和金额加起来就是账户的
+全部退款。币种保持 Stripe 返回的小写代码；金额按与 `summary` 相同的最小货币单位
+规则换算（两位小数币种除以 100，JPY、KRW 等零小数币种按文档原样打印，见
+<https://docs.stripe.com/currencies>）。账户没有退款记录时不打印任何退款行，也就
+没有合计行；此时加 `--csv` 的 CSV 只有表头一行，终端也只有
+`exported refunds-summary rows=0 to ...` 这一行提示。
 
 失败与修复：`--since` / `--until` 传的不是 `YYYY-MM-DD` 日期时以退出码 2 结束并报
 `error: --since must be a YYYY-MM-DD date, got '2026-13-01'`（或
