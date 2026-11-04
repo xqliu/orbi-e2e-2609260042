@@ -40,7 +40,12 @@ that talks to the Stripe API with the operator's live secret key.
   works alone, and a malformed or reversed date fails before any request.
 * ``python -m stripe_payments summary`` prints the payments total, the refunds
   total and the net income per currency, one currency per line, so a daily
-  check does not need the exported CSV files.  ``--currency usd`` prints only
+  check does not need the exported CSV files.  The first line names the UTC
+  day range of the records the run totalled, e.g.
+  ``统计范围 2026-09-05..2026-10-20`` (the earliest and the latest totalled
+  record, so a plain run without a date option still prints a real range),
+  and a run that totalled no record prints ``统计范围 无记录`` as its only
+  line (Issue #321).  ``--currency usd`` prints only
   that currency's line; omitted, every currency is printed.  After the
   currency rows one all-currency ``合计`` line adds up the printed values
   above it (Issue #243), then one ``总笔数 N`` line gives the number of
@@ -53,9 +58,12 @@ that talks to the Stripe API with the operator's live secret key.
   currency instead (Issue #248).  ``--csv`` also
   writes those same rows to ``summary-<date>.csv`` (one column per summary
   field, so a spreadsheet shows them side by side); omitted, the command only
-  prints, as before.  ``--quiet`` prints only the net total per currency
-  (``USD 1,233.57``), one line per currency, so a script reads the net income
-  without parsing the payments and refunds columns (Issue #260).  ``--top N``
+  prints, as before.  The range line is terminal output only: the file keeps
+  one row per summary row, with no range column and no range row.
+  ``--quiet`` prints only the net total per currency (``USD 1,233.57``), one
+  line per currency, so a script reads the net income without parsing the
+  payments and refunds columns (Issue #260); the range line is left out
+  there, so every printed line stays a net value (Issue #321).  ``--top N``
   prints only the N currencies with the largest net total, largest first
   (Issue #262).  ``--days N`` reads only the payments and refunds created in
   the last N days, so a daily check can ignore older records (Issue #271).
@@ -237,6 +245,13 @@ SUMMARY_SMALLEST_LABEL = "最小单笔金额"
 # records it added up, so the number of records of the run is readable as a
 # sentence next to the totals.
 SUMMARY_RECORD_LABEL = "记录"
+
+# Issue #321: every full summary opens with one line naming the UTC day range
+# of the records it totalled, e.g. ``统计范围 2026-09-05..2026-10-20``, so the
+# operator reads which stretch of time the numbers describe.  A run that
+# totalled no record opens with ``统计范围 无记录`` instead.
+SUMMARY_RANGE_LABEL = "统计范围"
+SUMMARY_NO_RECORDS = "无记录"
 
 # Issue #271: `summary --days N` reads only the last N days.  The window is a
 # rolling N*24-hour period ending now, and Stripe's documented `created[gte]`
@@ -505,6 +520,13 @@ def _month(created: object) -> str:
     )
 
 
+def _utc_day(created: object) -> str:
+    """The UTC day (``YYYY-MM-DD``) of a Stripe ``created`` timestamp."""
+    return datetime.fromtimestamp(int(created), tz=timezone.utc).strftime(
+        "%Y-%m-%d"
+    )
+
+
 def _now_timestamp() -> int:
     """The current Unix time, kept as a function so a test can pin it."""
     return int(datetime.now(timezone.utc).timestamp())
@@ -594,6 +616,17 @@ def _created_filter(
     return {"created": created} if created else {}
 
 
+def _widen_range(
+    first: int | None, last: int | None, created: object
+) -> tuple[int, int]:
+    """Widen the ``(first, last)`` range with one record's ``created``."""
+    stamp = int(created)
+    return (
+        stamp if first is None else min(first, stamp),
+        stamp if last is None else max(last, stamp),
+    )
+
+
 def summarize_data(
     *,
     by_month: bool = False,
@@ -601,12 +634,16 @@ def summarize_data(
     days: int | None = None,
     since: int | None = None,
     until: int | None = None,
-) -> (
+) -> tuple[
     dict[str, tuple[int, int, int, int, int]]
-    | dict[tuple[str, ...], tuple[int, int, int, int, int]]
-):
-    """Return ``{currency: (payments_total, refunds_total, count, largest,
-    smallest)}``.
+    | dict[tuple[str, ...], tuple[int, int, int, int, int]],
+    int | None,
+    int | None,
+]:
+    """Return ``(totals, first_created, last_created)``.
+
+    ``totals`` is ``{currency: (payments_total, refunds_total, count,
+    largest, smallest)}``.
 
     Only records Stripe reports as ``succeeded`` are totalled (Issue #318):
     a payment with another ``status`` (for example ``requires_capture``,
@@ -643,6 +680,11 @@ def summarize_data(
     that UTC day window are totalled; omitted, the side is unfiltered and the
     whole account is totalled as before.
 
+    ``first_created`` and ``last_created`` are the ``created`` timestamps of
+    the earliest and the latest record those totals cover (Issue #321), or
+    ``None`` twice when no totalled record was read, so the summary can print
+    the UTC day range the numbers describe.
+
     Every page of the PaymentIntents and Refunds lists is read, so the totals
     cover every matching record, not only the first page.
     """
@@ -654,6 +696,11 @@ def summarize_data(
     # the by-customer grouping needs it, so the plain summary keeps no
     # per-payment state.
     payment_customers: dict[str, str | None] = {}
+    # Issue #321: the earliest and latest record the totals cover, so the
+    # summary prints the UTC day range the numbers describe instead of the
+    # option values (which name no range at all when both are omitted).
+    first_created: int | None = None
+    last_created: int | None = None
     for payment in _list_all(
         stripe.PaymentIntent, limit=DEFAULT_LIMIT, params=filters
     ):
@@ -663,6 +710,9 @@ def summarize_data(
         # count, extreme or CSV row.
         if payment.status != "succeeded":
             continue
+        first_created, last_created = _widen_range(
+            first_created, last_created, payment.created
+        )
         customer = getattr(payment, "customer", None)
         if by_customer:
             payment_customers[payment.id] = customer
@@ -689,6 +739,9 @@ def summarize_data(
         # count, extreme or CSV row either.
         if refund.status != "succeeded":
             continue
+        first_created, last_created = _widen_range(
+            first_created, last_created, refund.created
+        )
         key = _summary_key(
             refund.currency,
             refund.created,
@@ -703,12 +756,16 @@ def summarize_data(
         # Issue #296: a refund is one record like a payment.
         entry[4] = hundredths if entry[2] == 0 else min(entry[4], hundredths)
         entry[2] += 1
-    return {
-        key: (payments, refunds, count, largest, smallest)
-        for key, (payments, refunds, count, largest, smallest) in (
-            totals.items()
-        )
-    }
+    return (
+        {
+            key: (payments, refunds, count, largest, smallest)
+            for key, (payments, refunds, count, largest, smallest) in (
+                totals.items()
+            )
+        },
+        first_created,
+        last_created,
+    )
 
 
 def _summary_key(
@@ -1005,6 +1062,20 @@ def _summary_record_line(count: int) -> str:
     return f"{SUMMARY_RECORD_LABEL} {count} 条"
 
 
+def _summary_range_line(first: object | None, last: object | None) -> str:
+    """The summary's first line: the UTC day range the totals cover.
+
+    ``first`` and ``last`` are the ``created`` timestamps of the earliest and
+    the latest totalled record, so the line reads e.g.
+    ``统计范围 2026-09-05..2026-10-20`` and names the stretch of time the
+    printed numbers describe.  With no totalled record it reads
+    ``统计范围 无记录`` instead.
+    """
+    if first is None or last is None:
+        return f"{SUMMARY_RANGE_LABEL} {SUMMARY_NO_RECORDS}"
+    return f"{SUMMARY_RANGE_LABEL} {_utc_day(first)}..{_utc_day(last)}"
+
+
 def write_summary_csv(
     rows: Sequence[dict],
     *,
@@ -1189,7 +1260,9 @@ def _parser() -> argparse.ArgumentParser:
         "summary",
         help=(
             "print payments, refunds and net income totals per currency, "
-            "one currency per line, then one total line adding them up, "
+            "one currency per line, opened by one line naming the UTC date "
+            "range of the records it totalled, then one total line adding "
+            "them up, "
             "one line giving the record count, one line giving the average "
             "amount, one line giving the largest single amount, one line "
             "giving the smallest single amount and one closing line "
@@ -1451,13 +1524,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             # inclusive, so the last second of the ``--until`` day is pushed
             # down (23:59:59Z).
             until = None if until_end is None else until_end - 1
-            totals = summarize_data(
+            totals, first_created, last_created = summarize_data(
                 by_month=args.by_month,
                 by_customer=args.by_customer,
                 days=args.days,
                 since=since,
                 until=until,
             )
+            if not args.quiet:
+                # Issue #321: the first line names the UTC day range of the
+                # records this run totalled, so the numbers below are read
+                # against a real stretch of time.  `--quiet` is the
+                # machine-readable net-only output, so it stays line-for-line
+                # a net value.
+                print(_summary_range_line(first_created, last_created))
             entries = []
             for key in sorted(totals):
                 # Issue #285: a grouped key is ``(..., currency)``, the plain

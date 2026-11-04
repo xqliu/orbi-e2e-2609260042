@@ -10,6 +10,7 @@ pre-release gate reads the check runs of the frozen base commit).
 import argparse
 import re
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 import stripe_payments
@@ -22,6 +23,16 @@ FEATURE_REQUEST_TEMPLATE = (
 )
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
+
+
+def _utc(*parts):
+    """Stripe's UTC epoch seconds for a wall-clock UTC date/time."""
+    return int(datetime(*parts, tzinfo=timezone.utc).timestamp())
+
+
+# The summary range sample covers records from 2026-09-05 to 2026-10-20 (UTC).
+SUMMARY_RANGE_FIRST = _utc(2026, 9, 5, 0, 0, 0)
+SUMMARY_RANGE_LAST = _utc(2026, 10, 20, 23, 59, 59)
 
 # Issue #104: the CI `live payment verification` job runs the `verify`
 # subcommand; the content check below asserts every flag after that command
@@ -41,6 +52,9 @@ SUMMARY_AVERAGE_SAMPLE_LINE = "平均金额 310.89"
 SUMMARY_LARGEST_SAMPLE_LINE = "最大单笔金额 1,234.57"
 # Issue #296: after the largest line the summary prints the smallest amount.
 SUMMARY_SMALLEST_SAMPLE_LINE = "最小单笔金额 0.01"
+# Issue #321: every full summary run opens with the UTC day range it totalled;
+# the earliest and latest totalled record of the documented sample are below.
+SUMMARY_RANGE_SAMPLE_LINE = "统计范围 2026-09-05..2026-10-20"
 # Issue #224: the README documents the refunds-summary command and its line format.
 STRIPE_REFUNDS_SUMMARY_COMMAND = "python -m stripe_payments refunds-summary"
 REFUNDS_SUMMARY_SAMPLE_LINE = "2026-W44 usd 退款 2 笔 3.50"
@@ -564,6 +578,37 @@ def test_readme_documents_the_summary_smallest_line():
     assert expected in body, (
         f"the {README_SUMMARY_HEADING!r} section must show the summary "
         f"smallest line {expected!r}"
+    )
+
+
+# Issue #321: every full summary run opens with the UTC date range it totalled.
+def test_readme_documents_the_summary_range_line():
+    body = _readme_subsection(README_SUMMARY_HEADING)
+    assert stripe_payments.SUMMARY_RANGE_LABEL in body, (
+        f"the {README_SUMMARY_HEADING!r} section must name the range line "
+        f"label {stripe_payments.SUMMARY_RANGE_LABEL!r}"
+    )
+    # The documented sample is rendered through the real line helper, so the
+    # docs cannot drift from what `summary` prints.
+    expected = stripe_payments._summary_range_line(
+        SUMMARY_RANGE_FIRST, SUMMARY_RANGE_LAST
+    )
+    assert expected == SUMMARY_RANGE_SAMPLE_LINE, (
+        "the sample range line must be the real line format"
+    )
+    assert expected in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show the summary "
+        f"range line {expected!r}"
+    )
+    # An account with no record prints the same label with the empty text.
+    empty = (
+        f"{stripe_payments.SUMMARY_RANGE_LABEL} "
+        f"{stripe_payments.SUMMARY_NO_RECORDS}"
+    )
+    assert stripe_payments._summary_range_line(None, None) == empty
+    assert empty in body, (
+        f"the {README_SUMMARY_HEADING!r} section must show {empty!r} for an "
+        f"account with no record"
     )
 
 
