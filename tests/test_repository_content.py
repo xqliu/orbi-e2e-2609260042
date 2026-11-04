@@ -426,6 +426,43 @@ def test_readme_documents_the_dated_export_file_names():
     )
 
 
+# Issue #312: `export --since/--until` exports only that UTC day window, both
+# edges included, and the command still ends with the exported counts line.
+def test_readme_documents_the_export_day_window():
+    """Issue #312: the export section shows --since/--until and its output."""
+    body = _readme_subsection(README_EXPORT_HEADING)
+    option_strings = _subparser_option_strings("export")
+    assert "--since" in option_strings, (
+        "the export subparser must define --since"
+    )
+    assert "--until" in option_strings, (
+        "the export subparser must define --until"
+    )
+    assert (
+        f"{STRIPE_EXPORT_COMMAND} --since 2026-09-01 --until 2026-09-30 "
+        "--format csv"
+    ) in body, (
+        f"the {README_EXPORT_HEADING!r} section must show "
+        f"{STRIPE_EXPORT_COMMAND!r} --since 2026-09-01 --until 2026-09-30 "
+        "--format csv"
+    )
+    expected = (
+        "exported payments=1 refunds=1 customers=2 to "
+        f"{stripe_payments.DEFAULT_OUTPUT_DIR}/"
+    )
+    assert expected in body, (
+        f"the {README_EXPORT_HEADING!r} section must show the exported counts "
+        f"line {expected!r}"
+    )
+    assert "00:00:00Z" in body and "23:59:59Z" in body, (
+        f"the {README_EXPORT_HEADING!r} section must say both day edges are "
+        "included (00:00:00Z and 23:59:59Z)"
+    )
+    assert "只传" in body, (
+        f"the {README_EXPORT_HEADING!r} section must say either date works alone"
+    )
+
+
 def test_readme_documents_the_summary_command_output():
     """Issue #221: one currency per line, thousands separators, upper-case."""
     text = _read(README)
