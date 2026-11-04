@@ -213,7 +213,12 @@ exported payments=1 refunds=1 customers=2 to export/
 
 `--since` / `--until` 可以和 `--customer`、`--email`、`--format`、`--limit`、
 `--output-dir` 一起用，它们都只看到窗口内的记录；不传这两个参数时导出内容与以前
-完全一致（整个账户）。
+完全一致（整个账户）。窗口同样套在 Customers 列表上，所以客户的 `created` 落在
+窗口外时不会出现在 `customers-<日期>.csv` 里，`payments-<日期>.csv` 的 `客户邮箱`
+那一格也就为空（与上面「该 customer 不在客户列表里」同一种情况）；`--email`
+搭配窗口时，如果该邮箱的客户本身创建在窗口外，命令会报
+`error: no Stripe customer has the email ...`，这时改用 `--customer cus_...`
+指定客户、把窗口只套在付款和退款上即可。
 
 失败与修复：`--format` 只接受 `csv`、`json`、`both`，填别的值时命令以退出码 2
 结束并报 `argument --format: invalid choice: 'xml' (choose from 'csv', 'json',
