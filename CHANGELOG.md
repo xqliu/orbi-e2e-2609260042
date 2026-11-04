@@ -93,6 +93,15 @@
   Stripe 的 `created[gte]` / `created[lte]` 过滤参数下推，文件和末行计数都只覆盖
   窗口内记录；两个参数可只传一个；日期非法或 `--since` 晚于 `--until` 时以退出码 2
   结束且不调用 Stripe、不创建 `--output-dir`；不传时导出内容与以前完全一致。
+- `refunds-summary` 子命令新增 `--since YYYY-MM-DD` / `--until YYYY-MM-DD`：只统计
+  `created`（UTC）落在这段日期窗口内的退款（`--since` 从当天 00:00:00Z 开始、
+  `--until` 到当天 23:59:59Z 结束，两端都含，如
+  `refunds-summary --since 2026-09-01 --until 2026-09-30`），周标签仍按退款的
+  `created` 算 ISO 周、行格式不变，所以窗口只决定哪些退款被计入——同一周里窗口外的
+  退款不出现在该周的行里；窗口通过 Refunds 列表的 `created[gte]` / `created[lte]`
+  下推，加 `--csv` 时 CSV 也只有窗口内的行；两个参数可只传一个；日期非法或
+  `--since` 晚于 `--until` 时以退出码 2 结束且不调用 Stripe、不写 CSV；不传时输出与
+  以前完全一致。
 
 ### 变更
 
