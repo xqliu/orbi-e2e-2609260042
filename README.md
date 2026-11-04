@@ -568,6 +568,37 @@ usd 退款 1.00、2.50 时，完整输出就是这三行：
 2026-W44 usd 退款 2 笔 3.50
 ```
 
+只想看某一段日期（按 UTC 整天）的退款时加 `--since` 和 `--until`：
+
+```sh
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments refunds-summary --since 2026-09-01 --until 2026-09-30
+```
+
+`--since` 从当天 00:00:00Z（含）开始，`--until` 到当天 23:59:59Z（含）结束，所以
+两端都是整天、边界上的退款也算在窗口内；两个参数可以只传一个，只传 `--since` 时
+没有上界，只传 `--until` 时没有下界。窗口通过 Refunds 列表的 `created[gte]` /
+`created[lte]` 过滤参数下推，所以只读取这一时间段的退款。周标签仍由每条退款的
+`created` 用 UTC ISO 8601 周算出，币种、金额换算和行格式与不加这两个参数时相同，
+只是窗口外的退款不再出现在任何一行。例如 8 月 31 日有一笔 usd 退款 0.50、`created`
+正好是 2026-09-30T23:59:59Z 的 eur 退款 1.00、10 月 1 日有一笔 usd 退款 2.50 时，
+上面的命令只统计窗口内的那一笔（10 月 1 日的退款虽然也在 ISO 第 40 周，但不在窗口
+内，所以不出现）：
+
+```
+2026-W40 eur 退款 1 笔 1.00
+```
+
+加 `--csv` 时 CSV 也只有窗口内的行：同一份数据下上一条命令的 CSV 只有表头
+`周,币种,退款笔数,退款金额` 和下面这一行，终端在退款行之后多打印
+`exported refunds-summary rows=1 to export/refunds-summary-2026-10-28.csv`：
+
+```
+周,币种,退款笔数,退款金额
+2026-W40,eur,1,1.00
+```
+
+不传这两个参数时输出与上面的默认输出一致（统计账户里的全部退款）。
+
 加上 `--csv` 后，同样的行还会写成一个 CSV 文件，并在这些退款行之后多打印一行文件
 提示，说明写到了哪里：
 
@@ -607,7 +638,13 @@ Excel 不会把它拆成两列：
 `--csv` 的 CSV 只有表头一行，终端也只有 `exported refunds-summary rows=0 to ...`
 这一行提示。
 
-失败与修复：缺少 `STRIPE_LIVE_SECRET_KEY` 时命令以退出码 2 结束并报
+失败与修复：`--since` / `--until` 传的不是 `YYYY-MM-DD` 日期时以退出码 2 结束并报
+`error: --since must be a YYYY-MM-DD date, got '2026-13-01'`（或
+`error: --until must be a YYYY-MM-DD date, got '2026-02-30'`）；`--since` 晚于
+`--until` 时报
+`error: --until 2026-09-01 must not be before --since 2026-09-30`。这几种情况都在
+发出任何 Stripe 请求之前失败，加 `--csv` 也不会创建目录或文件，改成合法日期或正确
+顺序后重跑。缺少 `STRIPE_LIVE_SECRET_KEY` 时命令以退出码 2 结束并报
 `error: STRIPE_LIVE_SECRET_KEY is not set...`，补上环境变量后重跑（加 `--csv` 时
 不会创建目录或文件）；密钥失效时报 Stripe 的 `HTTP 401`，轮换环境 secret 后重跑。
 

@@ -3937,6 +3937,266 @@ def test_module_refunds_summary_fails_without_the_secret():
     assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
 
 
+# --- refunds-summary --since/--until (Issue #313) ------------------------
+#
+# Issue #313 accepts the same whole-day UTC window as `summary --since/--until`
+# (Issue #300/#303): `refunds-summary --since 2026-09-01 --until 2026-09-30`
+# counts only the refunds created inside those days, both edges included, and
+# pushes the window down as Stripe's documented `created[gte]`/`created[lte]`
+# list filters on the Refunds list.  The records below sit inside the window,
+# exactly on each edge and outside it, so a leak shows up in the printed lines.
+
+REFUNDS_WINDOW_SINCE = "2026-09-01"
+REFUNDS_WINDOW_UNTIL = "2026-09-30"
+# 2026-09-01 00:00:00Z and 2026-09-30 23:59:59Z, the two Stripe filter values.
+REFUNDS_WINDOW_START = _utc(2026, 9, 1, 0, 0, 0)
+REFUNDS_WINDOW_END = _utc(2026, 9, 30, 23, 59, 59)
+
+
+@pytest.fixture
+def stripe_refunds_window(stripe_api):
+    """Refunds inside, exactly on both edges and outside the window."""
+    stripe_api.list_payloads = {
+        "/v1/refunds": _list_payload(
+            # Exactly on the lower edge: the whole day is included.  It shares
+            # ISO week 36 with the out-of-window 2026-08-31 refund below.
+            _refund_on(
+                "re_window_start", 25, "eur", _utc(2026, 9, 1, 0, 0, 0)
+            ),
+            # Inside the window.
+            _refund_on("re_window_inside", 100, "usd", _utc(2026, 9, 10, 12)),
+            # Exactly on the upper edge: the whole day is included.  It shares
+            # ISO week 40 with the out-of-window 2026-10-01 refund below.
+            _refund_on(
+                "re_window_end", 100, "eur", _utc(2026, 9, 30, 23, 59, 59)
+            ),
+            # The last second before the window.
+            _refund_on("re_before", 50, "usd", _utc(2026, 8, 31, 23, 59, 59)),
+            # The first second after the window.
+            _refund_on("re_after", 250, "usd", _utc(2026, 10, 1, 0, 0, 0)),
+        )
+    }
+    return stripe_api
+
+
+REFUNDS_WINDOW_SAMPLE_LINES = [
+    # The eur refund exactly on the lower edge, in ISO week 36.
+    "2026-W36 eur 退款 1 笔 0.25",
+    # The usd refund inside the window, in ISO week 37.
+    "2026-W37 usd 退款 1 笔 1.00",
+    # The eur refund exactly on the upper edge, in ISO week 40.
+    "2026-W40 eur 退款 1 笔 1.00",
+]
+
+
+def test_cli_refunds_summary_since_until_prints_only_the_window_rows(
+    live_key, stripe_refunds_window, capsys
+):
+    """Acceptance: only the window refunds, both edges included."""
+    exit_code = stripe_payments.main(
+        [
+            "refunds-summary",
+            "--since",
+            REFUNDS_WINDOW_SINCE,
+            "--until",
+            REFUNDS_WINDOW_UNTIL,
+        ]
+    )
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines() == REFUNDS_WINDOW_SAMPLE_LINES
+
+
+def test_refunds_summary_since_until_sends_the_documented_created_filters(
+    live_key, stripe_refunds_window
+):
+    """Acceptance: the Refunds list carries created[gte] and created[lte]."""
+    assert (
+        stripe_payments.main(
+            [
+                "refunds-summary",
+                "--since",
+                REFUNDS_WINDOW_SINCE,
+                "--until",
+                REFUNDS_WINDOW_UNTIL,
+            ]
+        )
+        == 0
+    )
+
+    assert [request["path"] for request in stripe_refunds_window.requests] == [
+        "/v1/refunds",
+    ]
+    for request in stripe_refunds_window.requests:
+        assert request["form"]["created[gte]"] == [
+            str(REFUNDS_WINDOW_START)
+        ]
+        assert request["form"]["created[lte]"] == [str(REFUNDS_WINDOW_END)]
+
+
+@pytest.mark.parametrize(
+    "arguments, present, absent",
+    [
+        (["--since", REFUNDS_WINDOW_SINCE], "created[gte]", "created[lte]"),
+        (["--until", REFUNDS_WINDOW_UNTIL], "created[lte]", "created[gte]"),
+    ],
+)
+def test_refunds_summary_with_only_one_window_edge_leaves_the_other_unfiltered(
+    live_key, stripe_refunds_window, arguments, present, absent
+):
+    """Acceptance: one date alone filters only that side of the window."""
+    assert stripe_payments.main(["refunds-summary", *arguments]) == 0
+
+    assert len(stripe_refunds_window.requests) == 1
+    request = stripe_refunds_window.requests[0]
+    assert present in request["form"]
+    assert absent not in request["form"]
+    assert request["form"][present] == [
+        str(
+            REFUNDS_WINDOW_START
+            if present == "created[gte]"
+            else REFUNDS_WINDOW_END
+        )
+    ]
+
+
+def test_refunds_summary_without_since_and_until_sends_no_created_filter(
+    live_key, stripe_refund_weeks
+):
+    """Acceptance: without the two options the request is the old one."""
+    assert stripe_payments.main(["refunds-summary"]) == 0
+
+    assert [request["path"] for request in stripe_refund_weeks.requests] == [
+        "/v1/refunds"
+    ]
+    for request in stripe_refund_weeks.requests:
+        assert request["form"] == {"limit": ["10"]}
+
+
+def test_refunds_summary_since_until_csv_writes_only_the_window_rows(
+    live_key, stripe_refunds_window, export_date, tmp_path, capsys
+):
+    """Acceptance: --csv writes exactly the printed window rows."""
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            [
+                "refunds-summary",
+                "--since",
+                REFUNDS_WINDOW_SINCE,
+                "--until",
+                REFUNDS_WINDOW_UNTIL,
+                "--csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    assert capsys.readouterr().out.splitlines() == [
+        *REFUNDS_WINDOW_SAMPLE_LINES,
+        _refunds_summary_hint(3, _refunds_summary_csv_file(output_dir)),
+    ]
+    assert _refunds_summary_csv_rows(output_dir) == [
+        REFUNDS_SUMMARY_CSV_HEADER,
+        ["2026-W36", "eur", "1", "0.25"],
+        ["2026-W37", "usd", "1", "1.00"],
+        ["2026-W40", "eur", "1", "1.00"],
+    ]
+
+
+@pytest.mark.parametrize(
+    "arguments, message",
+    [
+        (
+            ["--since", "2026-13-01"],
+            "--since must be a YYYY-MM-DD date, got '2026-13-01'",
+        ),
+        (
+            ["--until", "2026-02-30"],
+            "--until must be a YYYY-MM-DD date, got '2026-02-30'",
+        ),
+        (
+            ["--since", "2026-09-30", "--until", "2026-09-01"],
+            "--until 2026-09-01 must not be before --since 2026-09-30",
+        ),
+    ],
+)
+def test_refunds_summary_since_until_rejects_bad_input_before_any_stripe_call(
+    live_key, stripe_refunds_window, export_date, tmp_path, capsys,
+    arguments, message,
+):
+    """Acceptance: bad input exits 2, calls nothing and writes no CSV."""
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "refunds-summary",
+            *arguments,
+            "--csv",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert captured.err.startswith("error: ")
+    assert message in captured.err
+    assert captured.out == ""
+    assert stripe_refunds_window.requests == []
+    assert not output_dir.exists()
+
+
+def test_refunds_summary_help_describes_the_since_and_until_options(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["refunds-summary", "--help"])
+
+    assert excinfo.value.code == 0
+    printed = capsys.readouterr().out
+    assert "--since" in printed
+    assert "--until" in printed
+
+
+def test_module_refunds_summary_since_until_totals_the_window(
+    local_stripe_server, tmp_path
+):
+    """The real user entry point: ``python -m stripe_payments refunds-summary``."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/refunds": _list_payload(
+            _refund_on(
+                "re_window", 100, "eur", _utc(2026, 9, 30, 23, 59, 59)
+            ),
+            _refund_on("re_before", 50, "usd", _utc(2026, 8, 31, 23, 59, 59)),
+        )
+    }
+
+    result = _run_module_command(
+        server,
+        [
+            "refunds-summary",
+            "--since",
+            REFUNDS_WINDOW_SINCE,
+            "--until",
+            REFUNDS_WINDOW_UNTIL,
+        ],
+        tmp_path,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout.splitlines() == ["2026-W40 eur 退款 1 笔 1.00"]
+    assert [request["path"] for request in recorder.requests] == [
+        "/v1/refunds"
+    ]
+    for request in recorder.requests:
+        assert request["form"]["created[gte]"] == [str(REFUNDS_WINDOW_START)]
+        assert request["form"]["created[lte]"] == [str(REFUNDS_WINDOW_END)]
+
+
 # --- export --customer (Issue #223) -------------------------------------
 
 

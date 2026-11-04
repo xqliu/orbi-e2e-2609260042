@@ -75,6 +75,13 @@ that talks to the Stripe API with the operator's live secret key.
   file is written into.  After the week rows one
   ``exported refunds-summary rows=<n> to <path>`` line names that file, so the
   operator reads where the CSV went (Issue #304).
+  ``--since 2026-09-01 --until 2026-09-30`` counts only the refunds created
+  in that inclusive UTC day window instead, so one calendar month of refunds
+  reconciles in one command (Issue #313); either date works alone, a
+  malformed or reversed date fails with the same message as ``summary``, and
+  the window is pushed down as the Refunds list's
+  ``created[gte]``/``created[lte]`` filters, so only that stretch of time is
+  read.  ``--csv`` then writes only the window rows.
 * ``python -m stripe_payments --version`` prints the version number of this
   entry point (``stripe_payments <version>``) and exits 0, so a run can be
   tied to a release without reading the source.
@@ -650,17 +657,28 @@ def _iso_week(created: object) -> str:
     return f"{iso.year}-W{iso.week:02d}"
 
 
-def summarize_refunds_by_week() -> dict[tuple[str, str], tuple[int, int]]:
+def summarize_refunds_by_week(
+    since: int | None = None, until: int | None = None
+) -> dict[tuple[str, str], tuple[int, int]]:
     """Return ``{(YYYY-Www, currency): (count, amount)}`` for every refund.
 
     The week comes from the refund's ``created`` timestamp in UTC, which is
     the time Stripe's dashboard shows, and is the ISO 8601 week, so every
     refund record is counted in exactly one week row.  Every page of the
-    Refunds list is read, so the totals cover the whole account.
+    Refunds list is read, so the totals cover every matching record.
+
+    With ``since``/``until`` (the first and the last UTC epoch second of the
+    ``--since``/``--until`` day window) the Refunds list takes the documented
+    ``created[gte]``/``created[lte]`` filters (Issue #313), so only the refunds
+    created inside that window are counted; omitted, the side is unfiltered and
+    the whole account is counted as before.
     """
     stripe.api_key = live_secret_key()
+    filters = _created_filter(None, since, until)
     totals: dict[tuple[str, str], list[int]] = {}
-    for refund in _list_all(stripe.Refund, limit=DEFAULT_LIMIT):
+    for refund in _list_all(
+        stripe.Refund, limit=DEFAULT_LIMIT, params=filters
+    ):
         week = _iso_week(refund.created)
         entry = totals.setdefault((week, refund.currency.lower()), [0, 0])
         entry[0] += 1
@@ -1180,6 +1198,24 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     refunds_summary.add_argument(
+        "--since",
+        default=None,
+        metavar=SUMMARY_DATE_FORMAT,
+        help=(
+            "only count the refunds created on or after this UTC date "
+            "(YYYY-MM-DD, its whole day included); omitted, no start bound"
+        ),
+    )
+    refunds_summary.add_argument(
+        "--until",
+        default=None,
+        metavar=SUMMARY_DATE_FORMAT,
+        help=(
+            "only count the refunds created on or before this UTC date "
+            "(YYYY-MM-DD, its whole day included); omitted, no end bound"
+        ),
+    )
+    refunds_summary.add_argument(
         "--csv",
         action="store_true",
         help=(
@@ -1417,7 +1453,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                     print(f"exported summary rows={len(rows)} to {path}")
             return 0
         if args.command == "refunds-summary":
-            refund_totals = summarize_refunds_by_week()
+            # Issue #313: the same UTC day window as `summary --since/--until`,
+            # validated before any Refunds request or CSV write; the inclusive
+            # `created[lte]` edge is the last second of the `--until` day
+            # (23:59:59Z), the same value `summary` pushes down (Issue #303).
+            since, until_end = _date_window(args.since, args.until)
+            until = None if until_end is None else until_end - 1
+            refund_totals = summarize_refunds_by_week(
+                since=since, until=until
+            )
             rows = []
             for week, currency in sorted(refund_totals):
                 count, amount = refund_totals[(week, currency)]
