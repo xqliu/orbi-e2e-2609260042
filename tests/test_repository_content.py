@@ -986,6 +986,74 @@ def test_readme_documents_the_refunds_summary_csv_export():
     )
 
 
+# Issue #313: `refunds-summary --since/--until` counts only the refunds created
+# inside that UTC day window.  The expected lines are rendered through the real
+# helpers below, so the documented sample cannot drift from the output.
+REFUNDS_SUMMARY_WINDOW_SAMPLE_DATA = (("2026-W40", "eur", 1, 100),)
+
+
+def test_readme_documents_the_refunds_summary_day_window():
+    """Issue #313: the section shows --since/--until and its sample output."""
+    body = _readme_subsection(README_REFUNDS_SUMMARY_HEADING)
+    option_strings = _subparser_option_strings("refunds-summary")
+    assert "--since" in option_strings, (
+        "the refunds-summary subparser must define --since"
+    )
+    assert "--until" in option_strings, (
+        "the refunds-summary subparser must define --until"
+    )
+    command = (
+        f"{STRIPE_REFUNDS_SUMMARY_COMMAND} --since 2026-09-01 "
+        "--until 2026-09-30"
+    )
+    assert command in body, (
+        f"the {README_REFUNDS_SUMMARY_HEADING!r} section must show "
+        f"{command!r}"
+    )
+    expected = "\n".join(
+        stripe_payments._refund_week_line(week, currency, count, amount)
+        for week, currency, count, amount in REFUNDS_SUMMARY_WINDOW_SAMPLE_DATA
+    )
+    assert expected in body, (
+        f"the {README_REFUNDS_SUMMARY_HEADING!r} section must show the "
+        f"complete window output, expected:\n{expected}"
+    )
+    # The window is pushed down as the Refunds list filters, so the reader
+    # knows only that stretch of time is read.
+    for flag in ("created[gte]", "created[lte]"):
+        assert flag in body, (
+            f"the {README_REFUNDS_SUMMARY_HEADING!r} section must name the "
+            f"{flag} list filter of the day window"
+        )
+    # Both whole days are included and either date works alone.
+    assert "两端都是整天" in body, (
+        f"the {README_REFUNDS_SUMMARY_HEADING!r} section must say the window "
+        "includes both whole days"
+    )
+    assert "只传一个" in body, (
+        f"the {README_REFUNDS_SUMMARY_HEADING!r} section must say either date "
+        "works alone"
+    )
+
+
+def test_readme_documents_the_refunds_summary_window_csv_rows():
+    """Issue #313: with --csv the file carries only the window rows."""
+    body = _readme_subsection(README_REFUNDS_SUMMARY_HEADING)
+    assert "exported refunds-summary rows=1 to " in body, (
+        f"the {README_REFUNDS_SUMMARY_HEADING!r} section must show the "
+        "--csv notice of the window example, so the reader sees the row count"
+    )
+    header = ",".join(
+        stripe_payments.REFUNDS_SUMMARY_HEADERS[column]
+        for column in stripe_payments.REFUNDS_SUMMARY_COLUMNS
+    )
+    rows = ["2026-W40,eur,1,1.00"]
+    assert "\n".join([header, *rows]) in body, (
+        f"the {README_REFUNDS_SUMMARY_HEADING!r} section must show the window "
+        f"CSV as {[header, *rows]!r}"
+    )
+
+
 # Issue #257: the `test (20)` / `test (22)` base-branch checks only exist
 # because the CI `test` job runs the repository entry point once per supported
 # Node.js major version.  A missing matrix or a missing run step would leave
