@@ -4197,6 +4197,45 @@ def test_module_refunds_summary_since_until_totals_the_window(
         assert request["form"]["created[lte]"] == [str(REFUNDS_WINDOW_END)]
 
 
+@pytest.mark.parametrize(
+    "arguments, message",
+    [
+        (
+            ["--until", "2026-02-30"],
+            "error: --until must be a YYYY-MM-DD date, got '2026-02-30'",
+        ),
+        (
+            ["--since", "2026-09-30", "--until", "2026-09-01"],
+            "error: --until 2026-09-01 must not be before --since 2026-09-30",
+        ),
+    ],
+)
+def test_module_refunds_summary_rejects_bad_dates_before_any_stripe_call(
+    local_stripe_server, tmp_path, arguments, message
+):
+    """Acceptance: the real entry point exits 2, prints nothing, writes no file."""
+    recorder, server = local_stripe_server
+    output_dir = tmp_path / "export"
+
+    result = _run_module_command(
+        server,
+        [
+            "refunds-summary",
+            *arguments,
+            "--csv",
+            "--output-dir",
+            str(output_dir),
+        ],
+        tmp_path,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert message in result.stderr
+    assert recorder.requests == []
+    assert not output_dir.exists()
+
+
 # --- export --customer (Issue #223) -------------------------------------
 
 
