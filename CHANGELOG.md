@@ -86,6 +86,13 @@
   `created[gte]` / `created[lte]` 下推；与 `--by-month`、`--by-customer`、
   `--currency`、`--quiet`、`--top`、`--csv` 组合时也只看到窗口内记录；日期非法或
   `--since` 晚于 `--until` 时以退出码 2 结束且不调用 Stripe、不写 CSV。
+- `export` 子命令新增 `--since YYYY-MM-DD` / `--until YYYY-MM-DD`：只导出
+  `created`（UTC）落在这段日期窗口内的记录（`--since` 从当天 00:00:00Z 开始、
+  `--until` 到当天 23:59:59Z 结束，两端都含，如
+  `export --since 2026-09-01 --until 2026-09-30 --format csv`），三个列表都通过
+  Stripe 的 `created[gte]` / `created[lte]` 过滤参数下推，文件和末行计数都只覆盖
+  窗口内记录；两个参数可只传一个；日期非法或 `--since` 晚于 `--until` 时以退出码 2
+  结束且不调用 Stripe、不创建 `--output-dir`；不传时导出内容与以前完全一致。
 
 ### 变更
 

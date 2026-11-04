@@ -6252,3 +6252,374 @@ def test_module_summary_since_until_totals_the_window(
     for request in recorder.requests:
         assert request["form"]["created[gte]"] == [str(WINDOW_START)]
         assert request["form"]["created[lte]"] == [str(WINDOW_END)]
+
+# --- export --since/--until (Issue #312) --------------------------------
+#
+# The window is the same UTC day window `summary --since/--until` uses
+# (Issue #300/#303): pushed down as Stripe's `created[gte]`/`created[lte]`
+# list filters, both day edges included.
+
+
+def _window_intent(identifier, amount, created):
+    return {
+        "id": identifier,
+        "object": "payment_intent",
+        "amount": amount,
+        "currency": "usd",
+        "status": "succeeded",
+        "created": created,
+    }
+
+
+def _window_refund(identifier, amount, created, payment_intent):
+    return {
+        "id": identifier,
+        "object": "refund",
+        "payment_intent": payment_intent,
+        "amount": amount,
+        "currency": "usd",
+        "status": "succeeded",
+        "created": created,
+    }
+
+
+def _window_customer(identifier, created, email=None):
+    record = {
+        "id": identifier,
+        "object": "customer",
+        "created": created,
+    }
+    if email is not None:
+        record["email"] = email
+    return record
+
+
+@pytest.fixture
+def stripe_export_window_lists(stripe_api):
+    """The three lists an `export --since 2026-09-01 --until 2026-09-30` reads.
+
+    Each list carries a record on both edges of the window and one record
+    outside it on each side, so a leaked record shows up as an extra row.
+    """
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _window_intent("pi_aug", 800, _utc(2026, 8, 31, 23, 59, 59)),
+            # Exactly on the lower edge: the whole day is included.
+            _window_intent("pi_start", 111, _utc(2026, 9, 1, 0, 0, 0)),
+            _window_intent("pi_oct", 900, _utc(2026, 10, 1, 0, 0, 0)),
+        ),
+        "/v1/refunds": _list_payload(
+            _window_refund(
+                "re_aug", 20, _utc(2026, 8, 31, 23, 59, 59), "pi_aug"
+            ),
+            # Exactly on the upper edge: the whole day is included.
+            _window_refund(
+                "re_end", 25, _utc(2026, 9, 30, 23, 59, 59), "pi_start"
+            ),
+            _window_refund(
+                "re_oct", 30, _utc(2026, 10, 1, 0, 0, 0), "pi_oct"
+            ),
+        ),
+        "/v1/customers": _list_payload(
+            _window_customer("cus_aug", _utc(2026, 8, 31, 23, 59, 59)),
+            _window_customer(
+                "cus_in", _utc(2026, 9, 15), "buyer@example.com"
+            ),
+            _window_customer("cus_oct", _utc(2026, 10, 1, 0, 0, 0)),
+        ),
+    }
+    return stripe_api
+
+
+def test_cli_export_since_until_writes_only_the_window_records(
+    live_key, stripe_export_window_lists, export_date, tmp_path, capsys
+):
+    """Acceptance: only the in-window rows land in the files and counts."""
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "export",
+            "--since",
+            WINDOW_SINCE,
+            "--until",
+            WINDOW_UNTIL,
+            "--format",
+            "csv",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    assert (
+        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+        in capsys.readouterr().out
+    )
+
+    assert [
+        request["path"] for request in stripe_export_window_lists.requests
+    ] == ["/v1/payment_intents", "/v1/refunds", "/v1/customers"]
+    for request in stripe_export_window_lists.requests:
+        assert request["form"]["created[gte]"] == [str(WINDOW_START)]
+        assert request["form"]["created[lte]"] == [str(WINDOW_END)]
+
+    assert list(
+        csv.reader(
+            _export_file(output_dir, "payments", "csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
+    ) == [
+        ["编号", "金额", "币种", "状态", "创建时间", "客户邮箱"],
+        ["pi_start", "111", "usd", "succeeded", "2026-09-01T00:00:00Z", ""],
+    ]
+    assert list(
+        csv.reader(
+            _export_file(output_dir, "refunds", "csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
+    ) == [
+        ["编号", "付款编号", "金额", "币种", "状态", "创建时间"],
+        ["re_end", "pi_start", "25", "usd", "succeeded", "2026-09-30T23:59:59Z"],
+    ]
+    assert list(
+        csv.reader(
+            _export_file(output_dir, "customers", "csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
+    ) == [
+        ["编号", "邮箱", "创建时间"],
+        ["cus_in", "buyer@example.com", "2026-09-15T00:00:00Z"],
+    ]
+
+
+@pytest.mark.parametrize(
+    "arguments, present, absent",
+    [
+        (["--since", WINDOW_SINCE], "created[gte]", "created[lte]"),
+        (["--until", WINDOW_UNTIL], "created[lte]", "created[gte]"),
+    ],
+)
+def test_export_with_only_one_window_edge_leaves_the_other_unfiltered(
+    live_key, stripe_export_window_lists, export_date, tmp_path,
+    arguments, present, absent,
+):
+    """Acceptance: one date alone bounds only that side of the window."""
+    assert (
+        stripe_payments.main(
+            [
+                "export",
+                *arguments,
+                "--format",
+                "csv",
+                "--output-dir",
+                str(tmp_path / "export"),
+            ]
+        )
+        == 0
+    )
+
+    assert len(stripe_export_window_lists.requests) == 3
+    for request in stripe_export_window_lists.requests:
+        assert present in request["form"]
+        assert absent not in request["form"]
+        assert request["form"][present] == [
+            str(WINDOW_START if present == "created[gte]" else WINDOW_END)
+        ]
+
+
+def test_export_without_since_until_sends_no_created_filter(
+    live_key, stripe_export_window_lists, export_date, tmp_path
+):
+    """Backwards compatibility: no window, no created filter, whole account."""
+    assert (
+        stripe_payments.main(
+            [
+                "export",
+                "--format",
+                "csv",
+                "--output-dir",
+                str(tmp_path / "export"),
+            ]
+        )
+        == 0
+    )
+
+    for request in stripe_export_window_lists.requests:
+        assert "created[gte]" not in request["form"]
+        assert "created[lte]" not in request["form"]
+
+
+@pytest.mark.parametrize(
+    "arguments, message",
+    [
+        (
+            ["--since", "2026-13-01"],
+            "--since must be a YYYY-MM-DD date, got '2026-13-01'",
+        ),
+        (
+            ["--until", "2026-02-30"],
+            "--until must be a YYYY-MM-DD date, got '2026-02-30'",
+        ),
+        (
+            ["--since", "2026-09-30", "--until", "2026-09-01"],
+            "--until 2026-09-01 must not be before --since 2026-09-30",
+        ),
+    ],
+)
+def test_export_since_until_rejects_bad_input_before_any_stripe_call(
+    live_key, stripe_export_window_lists, tmp_path, capsys, arguments, message
+):
+    """Acceptance: bad input exits 2, calls nothing and creates no directory."""
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        ["export", *arguments, "--output-dir", str(output_dir)]
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert captured.err.startswith("error: ")
+    assert message in captured.err
+    assert captured.out == ""
+    assert stripe_export_window_lists.requests == []
+    assert not output_dir.exists()
+
+
+def test_export_help_lists_the_since_and_until_options(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["export", "--help"])
+
+    assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    assert "--since" in out
+    assert "--until" in out
+
+
+def test_module_export_since_until_writes_only_the_window_records(
+    local_stripe_server, tmp_path
+):
+    """The real user entry point: `python -m stripe_payments export`."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _window_intent("pi_aug", 800, _utc(2026, 8, 31, 23, 59, 59)),
+            _window_intent("pi_start", 111, _utc(2026, 9, 1, 0, 0, 0)),
+            _window_intent("pi_oct", 900, _utc(2026, 10, 1, 0, 0, 0)),
+        ),
+        "/v1/refunds": _list_payload(
+            _window_refund(
+                "re_end", 25, _utc(2026, 9, 30, 23, 59, 59), "pi_start"
+            ),
+            _window_refund(
+                "re_oct", 30, _utc(2026, 10, 1, 0, 0, 0), "pi_oct"
+            ),
+        ),
+        "/v1/customers": _list_payload(
+            _window_customer("cus_aug", _utc(2026, 8, 31, 23, 59, 59)),
+            _window_customer(
+                "cus_in", _utc(2026, 9, 15), "buyer@example.com"
+            ),
+        ),
+    }
+    output_dir = tmp_path / "export"
+
+    result = _run_module_command(
+        server,
+        [
+            "export",
+            "--since",
+            WINDOW_SINCE,
+            "--until",
+            WINDOW_UNTIL,
+            "--format",
+            "csv",
+            "--output-dir",
+            str(output_dir),
+        ],
+        tmp_path,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout.splitlines() == [
+        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+    ]
+    assert [request["path"] for request in recorder.requests] == [
+        "/v1/payment_intents",
+        "/v1/refunds",
+        "/v1/customers",
+    ]
+    for request in recorder.requests:
+        assert request["form"]["created[gte]"] == [str(WINDOW_START)]
+        assert request["form"]["created[lte]"] == [str(WINDOW_END)]
+
+    payments = list(
+        csv.reader(
+            _dated_export_file(output_dir, "payments", "csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
+    )
+    assert payments[1:] == [
+        ["pi_start", "111", "usd", "succeeded", "2026-09-01T00:00:00Z", ""]
+    ]
+    refunds = list(
+        csv.reader(
+            _dated_export_file(output_dir, "refunds", "csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
+    )
+    assert refunds[1:] == [
+        ["re_end", "pi_start", "25", "usd", "succeeded", "2026-09-30T23:59:59Z"]
+    ]
+    customers = list(
+        csv.reader(
+            _dated_export_file(output_dir, "customers", "csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
+    )
+    assert customers[1:] == [
+        ["cus_in", "buyer@example.com", "2026-09-15T00:00:00Z"]
+    ]
+
+def test_module_export_since_until_rejects_a_bad_date_without_writing(
+    tmp_path,
+):
+    """The real entry point fails on a bad date before any request or file."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != stripe_payments.LIVE_SECRET_KEY_ENV
+    }
+    output_dir = tmp_path / "export"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "stripe_payments",
+            "export",
+            "--since",
+            "2026-13-01",
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+
+    assert result.returncode == 2
+    assert (
+        "error: --since must be a YYYY-MM-DD date, got '2026-13-01'"
+        in result.stderr
+    )
+    assert result.stdout == ""
+    assert not output_dir.exists()
