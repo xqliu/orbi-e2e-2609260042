@@ -417,18 +417,35 @@ def export_data(
                 params={**payment_filters, **created_filters},
             )
         )
+    # Issue #314: the day window is enforced again on the records actually
+    # written, so a list response that carries a record outside the named UTC
+    # days (or an API that ignores the filters) can never put an out-of-window
+    # row into a file.  The ``created[gte]``/``created[lte]`` filters above
+    # still keep the read small; the files and the printed counts are the
+    # contract.
+    payments = [
+        payment
+        for payment in payments
+        if _created_in_window(payment.created, since, until)
+    ]
     payment_intent_ids = {payment.id for payment in payments}
     refunds = [
         refund
         for refund in _list_all(
             stripe.Refund, limit=limit, params=created_filters
         )
-        if not narrowed or refund.payment_intent in payment_intent_ids
+        if (not narrowed or refund.payment_intent in payment_intent_ids)
+        and _created_in_window(refund.created, since, until)
     ]
     if customers is None:
         customers = list(
             _list_all(stripe.Customer, limit=limit, params=created_filters)
         )
+    customers = [
+        customer_record
+        for customer_record in customers
+        if _created_in_window(customer_record.created, since, until)
+    ]
     # Issue #239: the payments CSV shows who paid.  The Customers list is
     # already read for the customers export, so the email column reuses it:
     # ``{customer id: email}`` maps each payment's documented ``customer`` id
@@ -516,6 +533,23 @@ def _date_window(
             f"--until {until} must not be before --since {since}"
         )
     return start, end
+
+
+def _created_in_window(
+    created: object, since: int | None, until: int | None
+) -> bool:
+    """Whether a record's ``created`` lies inside the day window.
+
+    ``since`` and ``until`` are the inclusive first and last UTC epoch seconds
+    ``_date_window()`` names, the same values the lists are read with
+    (``created[gte]``/``created[lte]``), so every record the export writes is
+    inside the ``--since``/``--until`` days.  An omitted edge stays unfiltered
+    (Issue #314).
+    """
+    stamp = int(created)
+    return (since is None or stamp >= since) and (
+        until is None or stamp <= until
+    )
 
 
 def _created_filter(

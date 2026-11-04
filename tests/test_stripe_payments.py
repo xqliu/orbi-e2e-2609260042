@@ -6396,6 +6396,112 @@ def test_cli_export_since_until_writes_only_the_window_records(
     ]
 
 
+# Issue #314: the files and the printed counts are the contract, so the
+# export enforces the day window on the records it writes even if a list
+# response carries a record outside the named UTC days (the read still uses
+# `created[gte]`/`created[lte]`, but the command does not depend on the
+# response honouring them for the rows it writes).
+def test_export_enforces_the_day_window_on_the_rows_it_writes(
+    live_key, export_date, tmp_path, capsys, monkeypatch
+):
+    window_since = "2026-10-01"
+    window_until = "2026-10-31"
+    def record(payload):
+        return SimpleNamespace(**payload)
+
+    records = {
+        stripe.PaymentIntent: [
+            record(_window_intent("pi_before", 800, _utc(2026, 9, 30, 23, 59, 59))),
+            record(_window_intent("pi_start", 111, _utc(2026, 10, 1, 0, 0, 0))),
+            record(_window_intent("pi_end", 222, _utc(2026, 10, 31, 23, 59, 59))),
+            record(_window_intent("pi_after", 900, _utc(2026, 11, 1, 0, 0, 0))),
+        ],
+        stripe.Refund: [
+            record(
+                _window_refund(
+                    "re_before", 20, _utc(2026, 9, 30, 23, 59, 59), "pi_before"
+                )
+            ),
+            record(
+                _window_refund(
+                    "re_end", 25, _utc(2026, 10, 31, 23, 59, 59), "pi_start"
+                )
+            ),
+            record(
+                _window_refund(
+                    "re_after", 30, _utc(2026, 11, 1, 0, 0, 0), "pi_after"
+                )
+            ),
+        ],
+        stripe.Customer: [
+            record(_window_customer("cus_before", _utc(2026, 9, 30, 23, 59, 59))),
+            record(
+                _window_customer(
+                    "cus_start", _utc(2026, 10, 1, 0, 0, 0), "buyer@example.com"
+                )
+            ),
+            record(_window_customer("cus_after", _utc(2026, 11, 1, 0, 0, 0))),
+        ],
+    }
+
+    def fake_list_all(resource, *, limit, params=None):
+        # A response that ignores the created filter: every record above comes
+        # back, so only the command's own window check can keep the files
+        # inside the named UTC days.
+        return iter(records[resource])
+
+    monkeypatch.setattr(stripe_payments, "_list_all", fake_list_all)
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "export",
+            "--since",
+            window_since,
+            "--until",
+            window_until,
+            "--format",
+            "csv",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    assert (
+        f"exported payments=2 refunds=1 customers=1 to {output_dir}/"
+        in capsys.readouterr().out
+    )
+    written = {
+        category: list(
+            csv.reader(
+                _export_file(output_dir, category, "csv").open(
+                    newline="", encoding="utf-8"
+                )
+            )
+        )
+        for category in ("payments", "refunds", "customers")
+    }
+    assert [row[0] for row in written["payments"][1:]] == [
+        "pi_start",
+        "pi_end",
+    ]
+    assert [row[0] for row in written["refunds"][1:]] == ["re_end"]
+    assert [row[0] for row in written["customers"][1:]] == ["cus_start"]
+    created_column = {
+        "payments": 4,
+        "refunds": 5,
+        "customers": 2,
+    }
+    for category, rows in written.items():
+        for row in rows[1:]:
+            assert (
+                "2026-10-01T00:00:00Z"
+                <= row[created_column[category]]
+                <= "2026-10-31T23:59:59Z"
+            )
+
+
 @pytest.mark.parametrize(
     "arguments, present, absent",
     [
