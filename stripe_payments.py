@@ -34,6 +34,10 @@ that talks to the Stripe API with the operator's live secret key.
   ``customer`` filter of each of them and the refunds are narrowed like
   ``--customer`` does.  An address that matches no customer fails with a
   message naming it instead of writing an empty export.
+  ``--since 2026-09-01 --until 2026-09-30`` exports only the records created
+  inside that inclusive UTC date window, via Stripe's ``created[gte]`` /
+  ``created[lte]`` list filters on all three lists (Issue #312); either date
+  works alone, and a malformed or reversed date fails before any request.
 * ``python -m stripe_payments summary`` prints the payments total, the refunds
   total and the net income per currency, one currency per line, so a daily
   check does not need the exported CSV files.  ``--currency usd`` prints only
@@ -342,6 +346,8 @@ def export_data(
     limit: int,
     customer: str | None = None,
     email: str | None = None,
+    since: int | None = None,
+    until: int | None = None,
 ) -> tuple[int, int, int]:
     """Read the three Stripe lists, then write CSV/JSON files for them.
 
@@ -361,16 +367,28 @@ def export_data(
     customer is reported instead of writing an empty export, because the exact
     filter turns a typo into an empty list rather than an error.
 
+    And ``since``/``until`` (the first and the last UTC epoch second the
+    ``_date_window()`` dates name) narrow every list to that UTC day window
+    (Issue #312): all three take the documented ``created[gte]`` /
+    ``created[lte]`` filters, so only the records created inside the window
+    are read and written.  Omitted, the side is unfiltered and the whole
+    account is exported as before.
+
     Every page of all three lists is fetched before any file is written, so a
     failing Stripe call (anywhere in the pagination) leaves no half-written
     export behind.  The files are named after the export date (Issue #230),
     e.g. ``payments-2026-10-28.csv``, so exports from different days coexist.
     """
     stripe.api_key = live_secret_key()
+    created_filters = _created_filter(None, since, until)
     narrowed = customer is not None or email is not None
     if email is not None:
         customers = list(
-            _list_all(stripe.Customer, limit=limit, params={"email": email})
+            _list_all(
+                stripe.Customer,
+                limit=limit,
+                params={"email": email, **created_filters},
+            )
         )
         if not customers:
             raise ConfigurationError(
@@ -384,7 +402,7 @@ def export_data(
             for payment in _list_all(
                 stripe.PaymentIntent,
                 limit=limit,
-                params={"customer": customer_record.id},
+                params={"customer": customer_record.id, **created_filters},
             )
         ]
     else:
@@ -393,16 +411,24 @@ def export_data(
         customers = None
         payment_filters = {"customer": customer} if customer else {}
         payments = list(
-            _list_all(stripe.PaymentIntent, limit=limit, params=payment_filters)
+            _list_all(
+                stripe.PaymentIntent,
+                limit=limit,
+                params={**payment_filters, **created_filters},
+            )
         )
     payment_intent_ids = {payment.id for payment in payments}
     refunds = [
         refund
-        for refund in _list_all(stripe.Refund, limit=limit)
+        for refund in _list_all(
+            stripe.Refund, limit=limit, params=created_filters
+        )
         if not narrowed or refund.payment_intent in payment_intent_ids
     ]
     if customers is None:
-        customers = list(_list_all(stripe.Customer, limit=limit))
+        customers = list(
+            _list_all(stripe.Customer, limit=limit, params=created_filters)
+        )
     # Issue #239: the payments CSV shows who paid.  The Customers list is
     # already read for the customers export, so the email column reuses it:
     # ``{customer id: email}`` maps each payment's documented ``customer`` id
@@ -1237,6 +1263,24 @@ def _parser() -> argparse.ArgumentParser:
             "combined with --customer); omitted, every record is exported"
         ),
     )
+    export.add_argument(
+        "--since",
+        default=None,
+        metavar=SUMMARY_DATE_FORMAT,
+        help=(
+            "only export the records created on or after this UTC date "
+            "(YYYY-MM-DD, its whole day included); omitted, no start bound"
+        ),
+    )
+    export.add_argument(
+        "--until",
+        default=None,
+        metavar=SUMMARY_DATE_FORMAT,
+        help=(
+            "only export the records created on or before this UTC date "
+            "(YYYY-MM-DD, its whole day included); omitted, no end bound"
+        ),
+    )
     return parser
 
 
@@ -1452,6 +1496,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "--email and --customer cannot be combined: pass the "
                 "customer's email or its cus_... id, not both"
             )
+        # Issue #312: a malformed or reversed date fails before any list
+        # request and before the --output-dir is created.  Like the summary
+        # (Issue #303), Stripe's inclusive ``created[lte]`` edge is the last
+        # second of the ``--until`` day.
+        since, until_end = _date_window(args.since, args.until)
+        until = None if until_end is None else until_end - 1
         formats = ("csv", "json") if args.format == "both" else (args.format,)
         payments, refunds, customers = export_data(
             output_dir=args.output_dir,
@@ -1459,6 +1509,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             limit=args.limit,
             customer=args.customer or None,
             email=args.email or None,
+            since=since,
+            until=until,
         )
         print(
             f"exported payments={payments} refunds={refunds} "

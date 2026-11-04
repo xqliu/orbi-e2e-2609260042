@@ -152,6 +152,7 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --format jso
 STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --format both
 STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --customer cus_123 --format csv
 STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --email buyer@example.com --format csv
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --since 2026-09-01 --until 2026-09-30 --format csv
 ```
 
 第一行只写 `payments-2026-10-28.csv`、`refunds-2026-10-28.csv`、
@@ -190,6 +191,30 @@ PaymentIntents 列表的 `customer` 条件读取付款，退款同样只保留 `
 `客户` 列），每行 `客户邮箱` 都是传入的地址。`--email` 与 `--customer` 二选一，
 同时给出时命令直接报错。
 
+只想导出某一段日期（按 UTC 整天）的记录时加 `--since` 和 `--until`（第六行）：
+
+```sh
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --since 2026-09-01 --until 2026-09-30 --format csv
+```
+
+`--since` 从当天 00:00:00Z（含）开始，`--until` 到当天 23:59:59Z（含）结束，
+所以两端都是整天、边界上的记录也会导出；两个参数可以只传一个，只传 `--since`
+时没有上界，只传 `--until` 时没有下界。窗口通过 Stripe 列表的 `created[gte]` /
+`created[lte]` 过滤参数下推，三个列表（PaymentIntents、Refunds、Customers）都只
+读取这一时间段的记录，所以 `payments-<日期>.csv`、`refunds-<日期>.csv`、
+`customers-<日期>.csv` 里不会出现窗口外的行，命令最后一行的计数也只数窗口内的
+记录。例如账户里有一条 2026-08-31 的付款、一条 `created` 正好是
+2026-09-01T00:00:00Z 的付款、一条 `created` 正好是 2026-09-30T23:59:59Z 的退款、
+一条 2026-10-01 的付款，窗口内还有 2 个客户时，输出是：
+
+```
+exported payments=1 refunds=1 customers=2 to export/
+```
+
+`--since` / `--until` 可以和 `--customer`、`--email`、`--format`、`--limit`、
+`--output-dir` 一起用，它们都只看到窗口内的记录；不传这两个参数时导出内容与以前
+完全一致（整个账户）。
+
 失败与修复：`--format` 只接受 `csv`、`json`、`both`，填别的值时命令以退出码 2
 结束并报 `argument --format: invalid choice: 'xml' (choose from 'csv', 'json',
 'both')`，此时不会调用 Stripe、也不会创建目录；按提示改成这三档之一再运行。
@@ -202,8 +227,12 @@ Stripe 里的不一致）时命令以退出码 2 结束并报
 此时只查了一次 Customers 列表、没有写任何文件；按 Stripe Dashboard 里的拼写
 重跑即可。`--email` 和 `--customer` 同时给出时报
 `error: --email and --customer cannot be combined: pass the customer's email or its cus_... id, not both`，
-去掉其中一个再运行。缺少 `STRIPE_LIVE_SECRET_KEY` 时同样以退出码 2
-报出变量名，补上环境变量后重跑。
+去掉其中一个再运行。`--since` / `--until` 传的不是 `YYYY-MM-DD` 日期时以退出码
+2 结束并报 `error: --since must be a YYYY-MM-DD date, got '2026-13-01'`；
+`--since` 晚于 `--until` 时报
+`error: --until 2026-09-01 must not be before --since 2026-09-30`。这两种情况都
+不会调用 Stripe、也不会创建 `--output-dir`，改成合法日期或正确顺序后重跑。缺少
+`STRIPE_LIVE_SECRET_KEY` 时同样以退出码 2 报出变量名，补上环境变量后重跑。
 
 ### 汇总收入（summary）
 
