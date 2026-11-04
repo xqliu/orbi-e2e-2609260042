@@ -7351,4 +7351,7 @@ def test_refunds_summary_still_counts_every_refund_status(
     assert stripe_payments.main(["refunds-summary"]) == 0
     assert capsys.readouterr().out.splitlines() == [
         "2026-W44 usd 退款 3 笔 16.00",
+        # Issue #319: the closing line totals the printed rows; the scope is
+        # still every refund status, so all three records stay counted.
+        "合计 退款 3 笔 16.00",
     ]
