@@ -282,6 +282,14 @@ Stripe 数一遍。`平均金额` 行紧跟在 `总笔数` 行之后，数值是
 小数，所以不用再翻 CSV 找最小的一笔。账户没有付款和退款时不打印任何行，也就
 没有合计行、总笔数行、平均金额行、最大单笔金额行和最小单笔金额行。
 
+`summary` 只统计 Stripe 状态为 `succeeded` 的记录：付款取 PaymentIntent 的
+`status`，退款取 Refund 的 `status`，其他状态（例如 `processing`、
+`requires_action`、`requires_capture`、`pending`、`failed`、`canceled`）
+既不进任何金额，也不计入 `总笔数`、`平均金额`、`最大单笔金额`、
+`最小单笔金额` 和 `--csv` 写出的行，所以打印出来的就是 Stripe 里真正收到的钱
+（`refunds-summary` 的统计范围不变）。这一点对所有选项组合都一样，并且每一页
+记录都会被筛选，不只看第一页。
+
 只想看某一个币种时传 `--currency`（不区分大小写，例如 `usd` 或 `USD`）：
 
 ```sh
