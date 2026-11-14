@@ -95,9 +95,12 @@ README_LICENSE_LINE = "本项目以 MIT 许可证发布。"
 # Issue #297 appends this exact line as the README final line; Issue #328
 # appends the test command after it, so it stays in the README.
 README_CONTRIBUTING_LINE = "想贡献请先开一个 Issue 说明你的想法，确认后再动手。"
-# Issue #328 appends this exact line as the new README final line: the tests
-# run with `python -m pytest`.
-README_LAST_LINE = "运行测试请执行 python -m pytest。"
+# Issue #328 appends this exact line as the README final line; Issue #331
+# appends the beta acceptance line after it, so it stays in the README.
+README_PYTEST_NOTE_LINE = "运行测试请执行 python -m pytest。"
+# Issue #331 appends this exact line as the new README final line: the beta
+# new-user acceptance run of v0.8.54.
+README_LAST_LINE = "Beta 新用户全流程验收：v0.8.54（2026-11-14）。"
 ISSUE_TEMPLATE_SECTIONS = (
     "## User outcome",
     "## Preconditions",
@@ -331,17 +334,21 @@ def test_readme_states_the_test_command_up_front():
     )
 
 
-def test_readme_ends_with_the_test_command_note():
-    """Issue #328: the README's last line tells readers how to run the tests."""
+def test_readme_ends_with_the_beta_acceptance_note():
+    """Issue #331: the README ends with the v0.8.54 beta acceptance line."""
     lines = [line for line in _read(README).splitlines() if line.strip()]
     assert lines[-1] == README_LAST_LINE, (
         f"the README must end with the {README_LAST_LINE!r} line, "
         f"got {lines[-1]!r}"
     )
-    # The final line names the command the CI `Run tests` step runs, so the
-    # reader reaches the real test entry point.
-    assert README_RUN_TESTS_COMMAND in lines[-1], (
-        f"the README's last line must name {README_RUN_TESTS_COMMAND!r}"
+    # Issue #328's test command note stays in the README, right above the
+    # acceptance line, and it still names the command the CI `Run tests` step
+    # runs, so the reader reaches the real test entry point.
+    assert README_PYTEST_NOTE_LINE in lines, (
+        f"the README must still carry the {README_PYTEST_NOTE_LINE!r} line"
+    )
+    assert README_RUN_TESTS_COMMAND in README_PYTEST_NOTE_LINE, (
+        f"the test command note must name {README_RUN_TESTS_COMMAND!r}"
     )
     # Issue #297's contributing note stays in the README, right above the test
     # command line, so appending the line does not drop it; Issue #282's
