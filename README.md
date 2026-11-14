@@ -859,3 +859,4 @@ Beta regression: Gemini native protocol hotfix v0.7.40.
 本项目以 MIT 许可证发布。
 想贡献请先开一个 Issue 说明你的想法，确认后再动手。
 运行测试请执行 python -m pytest。
+Beta 新用户全流程验收：v0.8.54（2026-11-14）。
