@@ -104,8 +104,11 @@ README_V0854_ACCEPTANCE_LINE = "Beta 新用户全流程验收：v0.8.54（2026-1
 # Issue #333 appends this exact line as the README final line; Issue #335
 # appends the `Last checked:` note after it, so it stays in the README.
 README_V0856_ACCEPTANCE_LINE = "Beta 新用户全流程验收：v0.8.56（2026-11-15）。"
-# Issue #335 appends this exact line as the new README final line.
-README_LAST_LINE = "Last checked: 2026-11-16"
+# Issue #335 appends this exact line as the README final line; Issue #337
+# appends the engine check line after it, so it stays in the README.
+README_LAST_CHECKED_LINE = "Last checked: 2026-11-16"
+# Issue #337 appends this exact line as the new README final line.
+README_LAST_LINE = "Engine check: v0.7.44 (2026-11-16)"
 ISSUE_TEMPLATE_SECTIONS = (
     "## User outcome",
     "## Preconditions",
@@ -340,11 +343,16 @@ def test_readme_states_the_test_command_up_front():
 
 
 def test_readme_ends_with_the_beta_acceptance_note():
-    """Issue #335: the README ends with the `Last checked:` note."""
+    """Issue #337: the README ends with the engine check line."""
     lines = [line for line in _read(README).splitlines() if line.strip()]
     assert lines[-1] == README_LAST_LINE, (
         f"the README must end with the {README_LAST_LINE!r} line, "
         f"got {lines[-1]!r}"
+    )
+    # Issue #335's `Last checked:` note stays in the README, right above the
+    # new one, so appending the engine check line does not drop it.
+    assert README_LAST_CHECKED_LINE in lines, (
+        f"the README must still carry the {README_LAST_CHECKED_LINE!r} line"
     )
     # Issue #333's v0.8.56 acceptance line stays in the README, right above the
     # new one, so appending the `Last checked:` line does not drop it; Issue

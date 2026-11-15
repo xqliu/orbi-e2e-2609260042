@@ -862,3 +862,4 @@ Beta regression: Gemini native protocol hotfix v0.7.40.
 Beta 新用户全流程验收：v0.8.54（2026-11-14）。
 Beta 新用户全流程验收：v0.8.56（2026-11-15）。
 Last checked: 2026-11-16
+Engine check: v0.7.44 (2026-11-16)
