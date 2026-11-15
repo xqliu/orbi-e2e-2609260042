@@ -101,9 +101,11 @@ README_PYTEST_NOTE_LINE = "运行测试请执行 python -m pytest。"
 # Issue #331 appends this exact line as the README final line; Issue #333
 # appends the v0.8.56 acceptance line after it, so it stays in the README.
 README_V0854_ACCEPTANCE_LINE = "Beta 新用户全流程验收：v0.8.54（2026-11-14）。"
-# Issue #333 appends this exact line as the new README final line: the beta
-# new-user acceptance run of v0.8.56.
-README_LAST_LINE = "Beta 新用户全流程验收：v0.8.56（2026-11-15）。"
+# Issue #333 appends this exact line as the README final line; Issue #335
+# appends the `Last checked:` note after it, so it stays in the README.
+README_V0856_ACCEPTANCE_LINE = "Beta 新用户全流程验收：v0.8.56（2026-11-15）。"
+# Issue #335 appends this exact line as the new README final line.
+README_LAST_LINE = "Last checked: 2026-11-16"
 ISSUE_TEMPLATE_SECTIONS = (
     "## User outcome",
     "## Preconditions",
@@ -338,14 +340,18 @@ def test_readme_states_the_test_command_up_front():
 
 
 def test_readme_ends_with_the_beta_acceptance_note():
-    """Issue #333: the README ends with the v0.8.56 beta acceptance line."""
+    """Issue #335: the README ends with the `Last checked:` note."""
     lines = [line for line in _read(README).splitlines() if line.strip()]
     assert lines[-1] == README_LAST_LINE, (
         f"the README must end with the {README_LAST_LINE!r} line, "
         f"got {lines[-1]!r}"
     )
-    # Issue #331's v0.8.54 acceptance line stays in the README, right above the
-    # new one, so appending the v0.8.56 line does not drop it.
+    # Issue #333's v0.8.56 acceptance line stays in the README, right above the
+    # new one, so appending the `Last checked:` line does not drop it; Issue
+    # #331's v0.8.54 acceptance line stays there too.
+    assert README_V0856_ACCEPTANCE_LINE in lines, (
+        f"the README must still carry the {README_V0856_ACCEPTANCE_LINE!r} line"
+    )
     assert README_V0854_ACCEPTANCE_LINE in lines, (
         f"the README must still carry the {README_V0854_ACCEPTANCE_LINE!r} line"
     )
