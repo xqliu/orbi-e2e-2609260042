@@ -357,7 +357,8 @@ def test_readme_ends_with_the_beta_acceptance_note():
         f"got {lines[-1]!r}"
     )
     # Issue #337's engine check line stays in the README, right above the new
-    # one, so appending the cloud check line does not drop it.
+    # one, so appending the cloud check and the new engine check lines does
+    # not drop it.
     assert README_ENGINE_CHECK_LINE in lines, (
         f"the README must still carry the {README_ENGINE_CHECK_LINE!r} line"
     )
