@@ -864,3 +864,4 @@ Beta 新用户全流程验收：v0.8.56（2026-11-15）。
 Last checked: 2026-11-16
 Engine check: v0.7.44 (2026-11-16)
 Cloud check: v0.8.58 (2026-11-16)
+Engine check: v0.7.45 (2026-11-16)
