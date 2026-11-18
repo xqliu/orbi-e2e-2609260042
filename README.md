@@ -114,6 +114,13 @@ If `pytest` or `stripe` is not installed, `python -m pytest` fails with
 `No module named pytest` (or `No module named stripe`); install both with
 `python -m pip install pytest stripe` and run `python -m pytest` again.
 
+## 联系方式
+
+如对本仓库有任何疑问，或需反馈使用过程中遇到的问题，请在本仓库的 Issue 页面提交，
+地址如下：
+
+<https://github.com/xqliu/orbi-e2e-2609260042/issues>
+
 ## Stripe 付款（live 验证）
 
 本仓库带一个最小的 Stripe 付款入口，只使用 live 密钥；密钥从不入库、也不进命令
