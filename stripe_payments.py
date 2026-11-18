@@ -103,7 +103,7 @@ that talks to the Stripe API with the operator's live secret key.
   malformed or reversed date fails with the same message as ``summary``, and
   the window is pushed down as the Refunds list's
   ``created[gte]``/``created[lte]`` filters, so only that stretch of time is
-  read.  ``--csv`` then writes only the window rows.  ``--days N` counts only
+  read.  ``--csv`` then writes only the window rows.  ``--days N`` counts only
   the refunds created in the last N days instead, the same rolling N*24-hour
   window (cutoff included) and the same ``error: --days must be positive``
   validation ``summary --days N`` uses (Issue #371); with ``--since`` the
