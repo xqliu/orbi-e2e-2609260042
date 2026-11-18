@@ -103,7 +103,12 @@ that talks to the Stripe API with the operator's live secret key.
   malformed or reversed date fails with the same message as ``summary``, and
   the window is pushed down as the Refunds list's
   ``created[gte]``/``created[lte]`` filters, so only that stretch of time is
-  read.  ``--csv`` then writes only the window rows.
+  read.  ``--csv`` then writes only the window rows.  ``--days N` counts only
+  the refunds created in the last N days instead, the same rolling N*24-hour
+  window (cutoff included) and the same ``error: --days must be positive``
+  validation ``summary --days N`` uses (Issue #371); with ``--since`` the
+  lower edge is the later of the two starts, and ``--until`` still ends at the
+  last second of its UTC day.
 * ``python -m stripe_payments --version`` prints the version number of this
   entry point (``stripe_payments <version>``) and exits 0, so a run can be
   tied to a release without reading the source.
@@ -797,7 +802,9 @@ def _iso_week(created: object) -> str:
 
 
 def summarize_refunds_by_week(
-    since: int | None = None, until: int | None = None
+    days: int | None = None,
+    since: int | None = None,
+    until: int | None = None,
 ) -> dict[tuple[str, str], tuple[int, int]]:
     """Return ``{(YYYY-Www, currency): (count, amount)}`` for every refund.
 
@@ -806,11 +813,19 @@ def summarize_refunds_by_week(
     refund record is counted in exactly one week row.  Every page of the
     Refunds list is read, so the totals cover every matching record.
 
+    With ``days`` the Refunds list takes the documented ``created[gte]``
+    cutoff (Issue #371), the same rolling N*24-hour window ending now that
+    ``summary --days N`` totals (Issue #271), so only the refunds created in
+    the last ``days`` days are counted; a refund exactly on the cutoff is
+    included.  Omitted, the whole account is counted as before.
+
     With ``since``/``until`` (the first and the last UTC epoch second of the
     ``--since``/``--until`` day window) the Refunds list takes the documented
     ``created[gte]``/``created[lte]`` filters (Issue #313), so only the refunds
     created inside that window are counted; omitted, the side is unfiltered and
-    the whole account is counted as before.
+    the whole account is counted as before.  With ``days`` too, the lower edge
+    is the later of the two starts, the intersection ``_created_filter()``
+    computes for ``summary`` (Issue #371).
 
     Only a refund Stripe reports as ``succeeded`` is counted (Issue #352), the
     same scope ``summary`` uses (Issue #318): a refund with another ``status``
@@ -819,7 +834,7 @@ def summarize_refunds_by_week(
     commands agree on the refunds of a window.
     """
     stripe.api_key = live_secret_key()
-    filters = _created_filter(None, since, until)
+    filters = _created_filter(days, since, until)
     totals: dict[tuple[str, str], list[int]] = {}
     for refund in _list_all(
         stripe.Refund, limit=DEFAULT_LIMIT, params=filters
@@ -1375,6 +1390,16 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     refunds_summary.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "only count the refunds created in the last N days "
+            "(e.g. --days 30); omitted, the whole account is counted"
+        ),
+    )
+    refunds_summary.add_argument(
         "--since",
         default=None,
         metavar=SUMMARY_DATE_FORMAT,
@@ -1663,14 +1688,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise ConfigurationError(
                         f"--currency must not be empty, got {args.currency!r}"
                     )
+            # Issue #371: the same positive `--days` window as `summary`
+            # (Issue #271), validated before any Refunds request or CSV write.
+            if args.days is not None and args.days < 1:
+                raise ConfigurationError(
+                    f"--days must be positive, got {args.days}"
+                )
             # Issue #313: the same UTC day window as `summary --since/--until`,
             # validated before any Refunds request or CSV write; the inclusive
             # `created[lte]` edge is the last second of the `--until` day
             # (23:59:59Z), the same value `summary` pushes down (Issue #303).
+            # Issue #371: with `--days` the lower edge is the later start,
+            # the intersection `_created_filter()` computes for `summary`.
             since, until_end = _date_window(args.since, args.until)
             until = None if until_end is None else until_end - 1
             refund_totals = summarize_refunds_by_week(
-                since=since, until=until
+                days=args.days, since=since, until=until
             )
             rows = []
             total_count = 0

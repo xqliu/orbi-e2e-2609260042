@@ -150,6 +150,13 @@
   某一周只有非 `succeeded` 的退款时不打印该周，账户没有 `succeeded` 退款时不打印
   退款行和合计行、`--csv` 只写表头，退出码仍为 0；`--currency` 先按状态筛选再按
   币种筛选；`export` 仍导出所有状态的退款明细（带 `status` 列），行格式与 CSV 表头不变。
+- `refunds-summary` 子命令新增 `--days N`：只统计最近 N×24 小时内（按退款
+  `created`，含边界，如 `refunds-summary --days 30`）的 `succeeded` 退款，周行、
+  `合计` 行和 `--csv` 数据行都只覆盖窗口内的退款，窗口通过 Refunds 列表的
+  `created[gte]` 过滤参数只读取这个时间段；与 `--since` 一起用时下界取两者更晚
+  的那个，`--until` 仍到当天 23:59:59Z 结束；与 `--currency`、`--csv`、
+  `--output-dir` 可组合；传 0 或负数时以退出码 2 结束并报
+  `error: --days must be positive, got 0`；不传时输出与以前完全一致。
 
 ## [v0.6.106] - 2026-09-28
 

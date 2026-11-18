@@ -711,6 +711,35 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments refunds-summary --s
 
 不传这两个参数时输出与上面的默认输出一致（统计账户里所有 `succeeded` 的退款）。
 
+只想看最近一段时间的退款（例如每周对账时只看最近 30 天）时加 `--days N`：
+
+```sh
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments refunds-summary --days 30
+```
+
+`--days N` 和 `summary --days N` 的含义、校验完全相同：窗口是从运行时刻往前推
+N×24 小时，只有 `created` 落在窗口内的 `succeeded` 退款参与周行、`合计` 行和
+CSV 数据行，正好落在窗口起点的那笔退款也算在窗口内；比窗口更早的退款（例如 31 天
+前的一笔 usd 退款 2.00，ISO 第 39 周）一行都不出现。窗口通过 Refunds 列表的
+`created[gte]` 过滤参数下推，所以只读取这段时间的退款。上面的默认样例数据都在
+最近 30 天内，所以 `--days 30` 的输出与默认输出相同：
+
+```
+2026-W40 usd 退款 1 笔 0.50
+2026-W44 eur 退款 1 笔 1.00
+2026-W44 usd 退款 2 笔 3.50
+合计 退款 4 笔 5.00
+```
+
+`--days` 与 `--since` 一起用时下界取两者更晚的那个（与 `summary` 相同），
+`--until` 仍到当天 23:59:59Z 结束；与 `--currency`、`--csv`、`--output-dir`
+一起用时先按窗口筛选，再按币种只打印对应的行，CSV 的数据行与终端打印的行一一对应。
+不传 `--days` 时输出与上面的默认输出一致（统计账户里所有 `succeeded` 的退款）。
+
+失败与修复：`--days` 传 0 或负数时以退出码 2 结束并报
+`error: --days must be positive, got 0`，在发出任何 Stripe 请求、写任何 CSV 文件
+之前就失败，改成正整数（如 `--days 30`）后重跑。
+
 加上 `--csv` 后，同样的行还会写成一个 CSV 文件，并在这些退款行之后多打印一行文件
 提示，说明写到了哪里：
 
