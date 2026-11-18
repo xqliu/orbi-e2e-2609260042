@@ -133,11 +133,15 @@
 - `summary` 子命令只统计 Stripe 状态为 `succeeded` 的付款和退款：PaymentIntent
   与 Refund 中其他状态的记录（如 `requires_payment_method`、`requires_capture`、
   `processing`、`pending`、`failed`、`canceled`）不再计入付款、退款、净额、
-  `合计`、`总笔数`、`平均金额`、`最大单笔金额`、`最小单笔金额`、`记录 N 条`
+  `合计`、`总笔数`、`平均金额`、`最大单笔金额`、`最小单笔金额`
   和 `--csv` 的每一格，所以汇总数字与 Stripe 里真正收到的钱一致；每一页记录都
   会被筛选，`--by-month`、`--by-customer`、`--quiet`、`--top`、`--currency`、
   `--days`、`--since/--until`、`--csv` 的任意组合都遵循同一规则；
   `refunds-summary` 当时仍统计所有状态的退款。
+- `summary` 子命令不再在最后多打印一行 `记录 N 条`：它的数字与上面 `总笔数`
+  永远相同，是重复的计数。删掉之后普通 `summary` 的最后一行就是
+  `最小单笔金额 <金额>`（加 `--csv` 时最后一行仍是文件提示），与 README 的完整
+  示例输出一致；`总笔数` 保留为唯一的记录条数，其余各行的数值、格式与顺序不变。
 - `refunds-summary` 子命令只统计 Stripe 状态为 `succeeded` 的退款，与 `summary`
   的退款口径一致：`pending`、`failed`、`canceled` 等状态的退款不再计入周行、
   `合计` 行的笔数和金额，也不写进 `refunds-summary-<日期>.csv` 的数据行，所以同一个
