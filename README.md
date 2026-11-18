@@ -702,7 +702,7 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments refunds-summary --s
 2026-W40,eur,1,1.00
 ```
 
-不传这两个参数时输出与上面的默认输出一致（统计账户里的全部退款）。
+不传这两个参数时输出与上面的默认输出一致（统计账户里所有 `succeeded` 的退款）。
 
 加上 `--csv` 后，同样的行还会写成一个 CSV 文件，并在这些退款行之后多打印一行文件
 提示，说明写到了哪里：
