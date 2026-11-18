@@ -1198,6 +1198,79 @@ def test_readme_documents_the_refunds_summary_window_csv_rows():
     )
 
 
+# Issue #371: `refunds-summary --days 30` counts only the refunds created in
+# the rolling 30*24-hour window, so the section shows the command, its sample
+# output, the later --since edge, the shared filter order and the failure path.
+# The sample is the README refunds-summary data with the ISO week 40 usd row and
+# both ISO week 44 rows inside the window.
+REFUNDS_SUMMARY_DAYS_SAMPLE_DATA = (
+    ("2026-W40", "usd", 1, 50),
+    ("2026-W44", "eur", 1, 100),
+    ("2026-W44", "usd", 2, 350),
+)
+
+
+def _refunds_summary_window_output(sample_data):
+    """The week lines plus the `合计` line of the given refund week data."""
+    lines = [
+        stripe_payments._refund_week_line(week, currency, count, amount)
+        for week, currency, count, amount in sample_data
+    ]
+    lines.append(
+        stripe_payments._refund_total_line(
+            sum(count for _, _, count, _ in sample_data),
+            sum(
+                stripe_payments._summary_hundredths(amount, currency)
+                for _, currency, _, amount in sample_data
+            ),
+        )
+    )
+    return "\n".join(lines)
+
+
+def test_readme_documents_the_refunds_summary_days_option():
+    """Issue #371: the section shows `--days N` and its sample output."""
+    body = _readme_subsection(README_REFUNDS_SUMMARY_HEADING)
+    assert "--days" in _subparser_option_strings("refunds-summary"), (
+        "the refunds-summary subparser must define --days"
+    )
+    command = f"{STRIPE_REFUNDS_SUMMARY_COMMAND} --days 30"
+    assert command in body, (
+        f"the {README_REFUNDS_SUMMARY_HEADING!r} section must show "
+        f"{command!r}"
+    )
+    expected = _refunds_summary_window_output(
+        REFUNDS_SUMMARY_DAYS_SAMPLE_DATA
+    )
+    assert expected in body, (
+        f"the {README_REFUNDS_SUMMARY_HEADING!r} section must show the "
+        f"complete `refunds-summary --days 30` output, expected:\n{expected}"
+    )
+    unwrapped = body.replace("\n", "")
+    # The window is pushed down as the Refunds list filter, so the reader
+    # knows only that stretch of time is read.
+    assert "created[gte]" in unwrapped, (
+        f"the {README_REFUNDS_SUMMARY_HEADING!r} section must name the "
+        "created[gte] list filter of the --days window"
+    )
+    # --since and --days intersect on the later lower edge.
+    assert "--days` 与 `--since` 一起用时下界取两者更晚的那个" in unwrapped, (
+        f"the {README_REFUNDS_SUMMARY_HEADING!r} section must say --since with "
+        "--days keeps the later lower edge"
+    )
+    # The failure path and its repair are documented next to the example.
+    assert "error: --days must be positive, got 0" in unwrapped, (
+        f"the {README_REFUNDS_SUMMARY_HEADING!r} section must show the "
+        "--days 0 failure message"
+    )
+    unreleased = _read(CHANGELOG).split("## [Unreleased]", 1)[1].split(
+        "\n## ", 1
+    )[0].replace("\n", "")
+    assert "`refunds-summary` 子命令新增 `--days N`" in unreleased, (
+        "CHANGELOG.md must record refunds-summary --days under [Unreleased]"
+    )
+
+
 # Issue #352: `refunds-summary` counts only succeeded refunds, the same scope
 # as `summary`, so both README sections describe one refund scope and the
 # changelog records the change under [Unreleased].

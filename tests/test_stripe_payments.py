@@ -3042,6 +3042,258 @@ def test_module_summary_days_fails_without_the_secret():
     assert stripe_payments.LIVE_SECRET_KEY_ENV in result.stderr
 
 
+# --- refunds-summary --days (Issue #371) --------------------------------
+#
+# Issue #371 accepts `refunds-summary --days N` with the same meaning and the
+# same validation as `summary --days N` (Issue #271): only the refunds created
+# inside the rolling N*24-hour window ending now take part in the week rows,
+# the `合计` line and the CSV rows, and a record exactly on the cutoff is
+# included.  The fixtures below reuse `summary_days_clock` (now pinned to
+# `DAYS_NOW`) and sit inside, exactly on and outside the 30-day cutoff.
+
+
+@pytest.fixture
+def stripe_refund_days(stripe_api):
+    """Refunds inside, exactly on and outside the last 30 days."""
+    stripe_api.list_payloads = {
+        "/v1/refunds": _list_payload(
+            # One day old: inside the window, in ISO week 44.
+            _days_refund("re_days_inside", 100, "usd", 1),
+            # Exactly 30 days old: the cutoff is inclusive, ISO week 40.
+            _days_refund("re_days_edge", 50, "eur", 30),
+            # 31 days old: outside the window, in ISO week 39.
+            _days_refund("re_days_before", 200, "usd", 31),
+        )
+    }
+    return stripe_api
+
+
+REFUNDS_DAYS_SAMPLE_LINES = [
+    "2026-W40 eur 退款 1 笔 0.50",
+    "2026-W44 usd 退款 1 笔 1.00",
+]
+REFUNDS_DAYS_TOTAL_LINE = "合计 退款 2 笔 1.50"
+
+
+def test_cli_refunds_summary_days_totals_only_the_window(
+    live_key, summary_days_clock, stripe_refund_days, capsys
+):
+    """Acceptance: only window refunds, cutoff inclusive, total matches."""
+    exit_code = stripe_payments.main(["refunds-summary", "--days", "30"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines() == [
+        *REFUNDS_DAYS_SAMPLE_LINES,
+        REFUNDS_DAYS_TOTAL_LINE,
+    ]
+
+
+def test_refunds_summary_days_sends_the_documented_created_filter(
+    live_key, summary_days_clock, stripe_refund_days
+):
+    """Acceptance: the Refunds list takes Stripe's created[gte] cutoff."""
+    assert stripe_payments.main(["refunds-summary", "--days", "30"]) == 0
+
+    assert [request["path"] for request in stripe_refund_days.requests] == [
+        "/v1/refunds"
+    ]
+    for request in stripe_refund_days.requests:
+        assert request["form"]["created[gte]"] == [str(DAYS_30_CUTOFF)]
+        assert "created[lte]" not in request["form"]
+
+
+@pytest.mark.parametrize(
+    "arguments, expected_gte",
+    [
+        # The --since day starts after the 30-day cutoff: --since wins.
+        (["--since", "2026-09-30"], _utc(2026, 9, 30, 0, 0, 0)),
+        # The cutoff is after the --since day: the cutoff wins.
+        (["--since", "2026-09-01"], DAYS_30_CUTOFF),
+    ],
+)
+def test_refunds_summary_days_and_since_keep_the_later_lower_edge(
+    live_key, summary_days_clock, stripe_refund_days, arguments, expected_gte
+):
+    """Acceptance: --since with --days is the intersection, later edge wins."""
+    assert (
+        stripe_payments.main(["refunds-summary", "--days", "30", *arguments])
+        == 0
+    )
+
+    assert len(stripe_refund_days.requests) == 1
+    request = stripe_refund_days.requests[0]
+    assert request["form"]["created[gte]"] == [str(expected_gte)]
+
+
+def test_refunds_summary_days_with_until_keeps_the_last_second_of_its_day(
+    live_key, summary_days_clock, stripe_refund_days
+):
+    """Acceptance: --until still ends at 23:59:59Z of its UTC day."""
+    assert (
+        stripe_payments.main(
+            ["refunds-summary", "--days", "30", "--until", "2026-10-01"]
+        )
+        == 0
+    )
+
+    assert len(stripe_refund_days.requests) == 1
+    form = stripe_refund_days.requests[0]["form"]
+    assert form["created[gte]"] == [str(DAYS_30_CUTOFF)]
+    assert form["created[lte]"] == [str(_utc(2026, 10, 1, 23, 59, 59))]
+
+
+def test_refunds_summary_without_days_reads_the_whole_account_as_before(
+    live_key, summary_days_clock, stripe_refund_days, capsys
+):
+    """Acceptance: omitting --days keeps the previous request and output."""
+    assert stripe_payments.main(["refunds-summary"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        # The 31-day-old refund still takes part: no window was asked for.
+        "2026-W39 usd 退款 1 笔 2.00",
+        *REFUNDS_DAYS_SAMPLE_LINES,
+        "合计 退款 3 笔 3.50",
+    ]
+    for request in stripe_refund_days.requests:
+        assert "created[gte]" not in request["form"]
+
+
+def test_refunds_summary_days_with_currency_and_csv_keeps_rows_in_step(
+    live_key,
+    summary_days_clock,
+    stripe_refund_days,
+    export_date,
+    tmp_path,
+    capsys,
+):
+    """Acceptance: the window narrows first, --currency only selects rows."""
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            [
+                "refunds-summary",
+                "--days",
+                "30",
+                "--currency",
+                "eur",
+                "--csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    printed = capsys.readouterr().out.splitlines()
+    assert printed == [
+        # Only the eur refund inside the window, no all-currency total line.
+        "2026-W40 eur 退款 1 笔 0.50",
+        _refunds_summary_hint(1, _refunds_summary_csv_file(output_dir)),
+    ]
+    assert _refunds_summary_csv_rows(output_dir) == [
+        REFUNDS_SUMMARY_CSV_HEADER,
+        ["2026-W40", "eur", "1", "0.50"],
+    ]
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_refunds_summary_days_rejects_a_non_positive_window(
+    live_key, stripe_api, export_date, tmp_path, value, capsys
+):
+    """Acceptance: bad --days exits 2, calls nothing and writes no file."""
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "refunds-summary",
+            "--days",
+            value,
+            "--csv",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert captured.err.startswith("error: ")
+    assert f"--days must be positive, got {value}" in captured.err
+    assert captured.out == ""
+    assert stripe_api.requests == []
+    assert not output_dir.exists()
+
+
+def test_refunds_summary_help_describes_the_days_option(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["refunds-summary", "--help"])
+
+    assert excinfo.value.code == 0
+    assert "--days" in capsys.readouterr().out
+
+
+def test_module_refunds_summary_days_totals_the_window(
+    local_stripe_server, tmp_path
+):
+    """The real user command: `python -m stripe_payments refunds-summary --days 30`."""
+    recorder, server = local_stripe_server
+    now = stripe_payments._now_timestamp()
+    inside = now - 24 * 60 * 60
+    outside = now - 40 * 24 * 60 * 60
+    recorder.list_payloads = {
+        "/v1/refunds": _list_payload(
+            _by_month_refund("re_inside", 100, "eur", inside),
+            _by_month_refund("re_outside", 250, "usd", outside),
+        )
+    }
+
+    result = _run_module_command(
+        server, ["refunds-summary", "--days", "30"], tmp_path
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        stripe_payments._refund_week_line(
+            stripe_payments._iso_week(inside), "eur", 1, 100
+        ),
+        stripe_payments._refund_total_line(1, 100),
+    ]
+    assert [request["path"] for request in recorder.requests] == [
+        "/v1/refunds"
+    ]
+    # The subprocess reads its own clock a moment after this one, so the
+    # cutoff it pushes down is the 30-day window, never an earlier one.
+    cutoff = int(recorder.requests[0]["form"]["created[gte]"][0])
+    assert now - 30 * 24 * 60 * 60 <= cutoff <= now - 30 * 24 * 60 * 60 + 30
+
+
+def test_module_refunds_summary_days_0_fails_before_any_stripe_call(
+    local_stripe_server, tmp_path
+):
+    """Failure path: the real entry point exits 2 and writes no file."""
+    recorder, server = local_stripe_server
+    output_dir = tmp_path / "export"
+
+    result = _run_module_command(
+        server,
+        [
+            "refunds-summary",
+            "--days",
+            "0",
+            "--csv",
+            "--output-dir",
+            str(output_dir),
+        ],
+        tmp_path,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "error: --days must be positive, got 0" in result.stderr
+    assert recorder.requests == []
+    assert not output_dir.exists()
+
+
 # --- summary --since/--until (Issue #300) ------------------------------
 
 
