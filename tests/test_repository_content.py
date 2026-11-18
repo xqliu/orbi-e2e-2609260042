@@ -23,6 +23,9 @@ FEATURE_REQUEST_TEMPLATE = (
 )
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
+# Issue #375: the repository ships a short code of conduct page under docs/.
+CODE_OF_CONDUCT = REPO_ROOT / "docs" / "CODE_OF_CONDUCT.md"
+CODE_OF_CONDUCT_HEADING = "# Code of Conduct"
 
 
 def _utc(*parts):
@@ -1391,3 +1394,17 @@ def test_readme_faq_section_answers_where_the_exported_files_go():
             f"the first {README_FAQ_HEADING!r} answer must name the exported "
             f"{category}-<日期> files"
         )
+
+
+def test_docs_has_a_code_of_conduct_page():
+    """Issue #375: docs/CODE_OF_CONDUCT.md opens with the required heading."""
+    lines = _read(CODE_OF_CONDUCT).splitlines()
+    assert lines[0] == CODE_OF_CONDUCT_HEADING, (
+        f"docs/CODE_OF_CONDUCT.md must open with {CODE_OF_CONDUCT_HEADING!r}, "
+        f"got {lines[0]!r}"
+    )
+    # A heading alone is not a code of conduct: the page needs a body that
+    # tells the reader what behaviour is expected.
+    assert any(line.strip() for line in lines[1:]), (
+        "docs/CODE_OF_CONDUCT.md must have a body below the heading"
+    )
