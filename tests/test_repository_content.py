@@ -120,8 +120,9 @@ README_ENGINE_CHECK_V0745_LINE = "Engine check: v0.7.45 (2026-11-16)"
 # Issue #343 appends this exact line as the README final line; Issue #349
 # appends the contributing note after it, so it stays in the README.
 README_TRIAL_CHECK_LINE = "Trial check (2026-11-18)"
-# Issue #349 appends this exact line as the new README final line.
-README_LAST_LINE = "See CONTRIBUTING notes in the issues."
+# Issue #26 appends this exact line as the new README final line; the
+# Issue #349 contributing note stays right above it.
+README_LAST_LINE = "测试命令：`python -m pytest`"
 ISSUE_TEMPLATE_SECTIONS = (
     "## User outcome",
     "## Preconditions",
@@ -356,7 +357,7 @@ def test_readme_states_the_test_command_up_front():
 
 
 def test_readme_ends_with_the_beta_acceptance_note():
-    """Issue #349: the README ends with the contributing note."""
+    """Issue #26: the README ends with the test command note."""
     lines = [line for line in _read(README).splitlines() if line.strip()]
     assert lines[-1] == README_LAST_LINE, (
         f"the README must end with the {README_LAST_LINE!r} line, "
