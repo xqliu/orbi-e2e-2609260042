@@ -241,11 +241,6 @@ SUMMARY_LARGEST_LABEL = "最大单笔金额"
 # the period is visible too.
 SUMMARY_SMALLEST_LABEL = "最小单笔金额"
 
-# Issue #298: the summary closes with one line counting the payment and refund
-# records it added up, so the number of records of the run is readable as a
-# sentence next to the totals.
-SUMMARY_RECORD_LABEL = "记录"
-
 # Issue #321: every full summary opens with one line naming the UTC day range
 # of the records it totalled, e.g. ``统计范围 2026-09-05..2026-10-20``, so the
 # operator reads which stretch of time the numbers describe.  A run that
@@ -1052,16 +1047,6 @@ def _summary_smallest_line(smallest: int) -> str:
     return f"{SUMMARY_SMALLEST_LABEL} {_format_hundredths(smallest)}"
 
 
-def _summary_record_line(count: int) -> str:
-    """The record-count line closing the summary, e.g. ``记录 4 条``.
-
-    ``count`` is the number of payment and refund records behind the printed
-    rows (Issue #298), the same count ``总笔数`` prints, so the last line says
-    how many records this run added up in one sentence.
-    """
-    return f"{SUMMARY_RECORD_LABEL} {count} 条"
-
-
 def _summary_range_line(first: object | None, last: object | None) -> str:
     """The summary's first line: the UTC day range the totals cover.
 
@@ -1264,9 +1249,8 @@ def _parser() -> argparse.ArgumentParser:
             "range of the records it totalled, then one total line adding "
             "them up, "
             "one line giving the record count, one line giving the average "
-            "amount, one line giving the largest single amount, one line "
-            "giving the smallest single amount and one closing line "
-            "counting the records"
+            "amount, one line giving the largest single amount and one "
+            "line giving the smallest single amount"
         ),
     )
     summary.add_argument(
@@ -1639,11 +1623,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 # Issue #294: the largest single amount those rows cover.
                 print(_summary_largest_line(total_largest))
                 # Issue #296: the smallest single amount those rows cover;
-                # every printed row carries at least one record.
+                # every printed row carries at least one record, and
+                # Issue #351 makes this the closing line of the summary.
                 print(_summary_smallest_line(total_smallest))
-                # Issue #298: how many records this run counted, as a
-                # closing sentence.
-                print(_summary_record_line(total_count))
             if args.csv:
                 path = write_summary_csv(
                     rows,
