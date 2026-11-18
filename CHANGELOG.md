@@ -137,7 +137,15 @@
   和 `--csv` 的每一格，所以汇总数字与 Stripe 里真正收到的钱一致；每一页记录都
   会被筛选，`--by-month`、`--by-customer`、`--quiet`、`--top`、`--currency`、
   `--days`、`--since/--until`、`--csv` 的任意组合都遵循同一规则；
-  `refunds-summary` 的统计范围不变。
+  `refunds-summary` 当时仍统计所有状态的退款。
+- `refunds-summary` 子命令只统计 Stripe 状态为 `succeeded` 的退款，与 `summary`
+  的退款口径一致：`pending`、`failed`、`canceled` 等状态的退款不再计入周行、
+  `合计` 行的笔数和金额，也不写进 `refunds-summary-<日期>.csv` 的数据行，所以同一个
+  时间窗口下 `summary` 的退款金额与 `refunds-summary` 的合计、两份 CSV 的退款金额
+  完全一致（零小数币种按 `summary` 的 `_summary_hundredths()` 口径换算后相等）；
+  某一周只有非 `succeeded` 的退款时不打印该周，账户没有 `succeeded` 退款时不打印
+  退款行和合计行、`--csv` 只写表头，退出码仍为 0；`--currency` 先按状态筛选再按
+  币种筛选；`export` 仍导出所有状态的退款明细（带 `status` 列），行格式与 CSV 表头不变。
 
 ## [v0.6.106] - 2026-09-28
 

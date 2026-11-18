@@ -80,10 +80,14 @@ that talks to the Stripe API with the operator's live secret key.
   amount per ISO week and currency, one line per week and currency, so the
   refunds of a week can be read without filtering the exported CSV files.
   The week comes from the refund's ``created`` timestamp in UTC and is the
-  ISO 8601 week (Monday to Sunday), labelled like ``2026-W44``.  After the week
-  rows one ``合计 退款 <n> 笔 <amount>`` line adds up their counts and printed
-  amounts (Issue #319), so a run reads the account total without summing the
-  rows by hand; with no refunds there are no rows and no total line.
+  ISO 8601 week (Monday to Sunday), labelled like ``2026-W44``.  Only a
+  refund Stripe reports as ``succeeded`` is counted, the same scope
+  ``summary`` uses (Issue #352): a ``pending``, ``failed`` or ``canceled``
+  refund stays out of every week row, the ``合计`` line and the CSV rows.
+  After the week rows one ``合计 退款 <n> 笔 <amount>`` line adds up their counts
+  and printed amounts (Issue #319), so a run reads the account total without
+  summing the rows by hand; with no succeeded refund there are no rows and no
+  total line.
   ``--currency usd`` prints only that currency's week rows
   (case-insensitive) and no ``合计`` line, those rows being the whole
   filtered output; omitted, every currency is printed.  ``--csv`` also writes
@@ -812,6 +816,12 @@ def summarize_refunds_by_week(
     ``created[gte]``/``created[lte]`` filters (Issue #313), so only the refunds
     created inside that window are counted; omitted, the side is unfiltered and
     the whole account is counted as before.
+
+    Only a refund Stripe reports as ``succeeded`` is counted (Issue #352), the
+    same scope ``summary`` uses (Issue #318): a refund with another ``status``
+    (``pending``, ``failed``, ``canceled``, ...) never paid money back, so it
+    takes part in no week row, no ``合计`` line and no CSV row, and both
+    commands agree on the refunds of a window.
     """
     stripe.api_key = live_secret_key()
     filters = _created_filter(None, since, until)
@@ -819,6 +829,12 @@ def summarize_refunds_by_week(
     for refund in _list_all(
         stripe.Refund, limit=DEFAULT_LIMIT, params=filters
     ):
+        # Issue #352: the same scope as `summary` (Issue #318), so both
+        # commands total the same refunds for a window.  A refund that is not
+        # succeeded (pending, failed, canceled, ...) never paid money back and
+        # takes part in no week row, total or CSV row.
+        if refund.status != "succeeded":
+            continue
         week = _iso_week(refund.created)
         entry = totals.setdefault((week, refund.currency.lower()), [0, 0])
         entry[0] += 1
