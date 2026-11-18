@@ -150,6 +150,13 @@
   某一周只有非 `succeeded` 的退款时不打印该周，账户没有 `succeeded` 退款时不打印
   退款行和合计行、`--csv` 只写表头，退出码仍为 0；`--currency` 先按状态筛选再按
   币种筛选；`export` 仍导出所有状态的退款明细（带 `status` 列），行格式与 CSV 表头不变。
+- `summary --csv` 写出的文件名带上分组：不加分组时仍是 `summary-<日期>.csv`，
+  `--by-month` 时是 `summary-by-month-<日期>.csv`，`--by-customer` 时是
+  `summary-by-customer-<日期>.csv`，两者一起用时是
+  `summary-by-customer-by-month-<日期>.csv`。同一天用不同分组导出会留下各自的
+  文件，不再用另一种表头覆盖同名文件，最后一行
+  `exported summary rows=N to <path>` 提示实际写出的那个文件；表头、列和
+  `--quiet` 的行为不变。
 
 ## [v0.6.106] - 2026-09-28
 
