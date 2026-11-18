@@ -157,6 +157,13 @@
   的那个，`--until` 仍到当天 23:59:59Z 结束；与 `--currency`、`--csv`、
   `--output-dir` 可组合；传 0 或负数时以退出码 2 结束并报
   `error: --days must be positive, got 0`；不传时输出与以前完全一致。
+- `summary --csv` 写出的文件名带上分组：不加分组时仍是 `summary-<日期>.csv`，
+  `--by-month` 时是 `summary-by-month-<日期>.csv`，`--by-customer` 时是
+  `summary-by-customer-<日期>.csv`，两者一起用时是
+  `summary-by-customer-by-month-<日期>.csv`。同一天用不同分组导出会留下各自的
+  文件，不再用另一种表头覆盖同名文件，最后一行
+  `exported summary rows=N to <path>` 提示实际写出的那个文件；表头、列和
+  `--quiet` 的行为不变。
 
 ## [v0.6.106] - 2026-09-28
 

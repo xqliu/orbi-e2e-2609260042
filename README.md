@@ -353,7 +353,7 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary --csv --out
 最小单笔金额行）。CSV 写到
 `--output-dir` 指定的目录，默认是 `export/`（和 `export` 子命令同一个目录，已被 `.gitignore`
 忽略）；文件名带导出当天的 UTC 日期（`YYYY-MM-DD`），所以不同天的汇总不会互相
-覆盖（同一天重复导出会覆盖同名文件）。CSV 第一行是中文表头
+覆盖（同一天用同一分组重复导出才会覆盖同名文件）。CSV 第一行是中文表头
 `币种,付款,退款,净额`，之后每个币种一行（排序与打印顺序一致，不含合计行），
 每一格就是上面打印行里的同一个值：
 
@@ -424,9 +424,11 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary --by-month 
 2026-10,USD,"1,234.57",1.00,"1,233.57"
 ```
 
-文件与不加 `--by-month` 时同名（`summary-<date>.csv`，默认写到 `export/`），只是表头
-多一列，所以同一天先跑 `summary --csv` 再跑 `summary --by-month --csv`（或反过来）
-会用另一种表头覆盖同名文件；想同时留两份就传不同的 `--output-dir`。
+文件名也带上分组：不加分组时是 `summary-<date>.csv`（默认写到 `export/`），
+`--by-month` 时是 `summary-by-month-<date>.csv`。所以同一天先跑
+`summary --csv` 再跑 `summary --by-month --csv`（或反过来）会留下两份文件，
+一份表头是 `币种,付款,退款,净额`、一份是 `月份,币种,付款,退款,净额`，不会互相
+覆盖；最后一行 `exported summary rows=N to <path>` 提示的就是实际写出的那个文件。
 
 不传 `--by-month` 时输出与上面的默认输出一致（每个币种一行 + 合计行 + 总笔数行 +
 平均金额行 + 最大单笔金额行 + 最小单笔金额行）。
@@ -462,7 +464,9 @@ cus_beta EUR 付款 10.00 退款 0.00 净额 10.00
 ```
 
 `--by-customer` 与 `--csv` 一起用时，CSV 第一列多出一列 `客户`（表头
-`客户,币种,付款,退款,净额`，其余与不加 `--by-customer` 时相同）：
+`客户,币种,付款,退款,净额`，其余与不加 `--by-customer` 时相同），文件名是
+`summary-by-customer-<date>.csv`（再与 `--by-month` 一起用时是
+`summary-by-customer-by-month-<date>.csv`，表头 `客户,月份,币种,付款,退款,净额`）：
 
 ```sh
 STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments summary --by-customer --csv
@@ -817,9 +821,12 @@ stripe_payments 0.6.106
 `--output-dir` 指定的目录，不传时就是这个 `export/`（已被 `.gitignore` 忽略，
 不会被误提交）。每次导出会写 `payments-<日期>`、`refunds-<日期>`、
 `customers-<日期>` 三组文件，后缀是 `.csv` 和/或 `.json`（`--format` 决定）；
-`summary --csv` 写的是 `summary-<日期>.csv`。文件名里的 `<日期>` 是导出当天的
+`summary --csv` 写的是 `summary-<日期>.csv`，带分组时文件名也带上分组
+（例如 `summary-by-month-2026-10-28.csv`、`summary-by-customer-2026-10-28.csv`）。
+文件名里的 `<日期>` 是导出当天的
 UTC 日期（`YYYY-MM-DD`，例如 `payments-2026-10-28.csv`），所以不同天的导出
-不会互相覆盖，同一天重复导出会覆盖同名文件。想换目录就传 `--output-dir`（例如
+不会互相覆盖，同一天重复导出会覆盖同名文件（`summary` 的不同分组文件名不同，
+各自保留）。想换目录就传 `--output-dir`（例如
 `--output-dir 对账`），文件就写到那个目录；命令最后一行
 `exported payments=... refunds=... customers=... to export/` 也会打印出实际目录。
 
