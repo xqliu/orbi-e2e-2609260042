@@ -56,10 +56,12 @@ that talks to the Stripe API with the operator's live secret key.
   (Issue #294), and one ``最小单笔金额 X`` line gives the smallest one
   (Issue #296).  ``--by-month`` groups the lines by month (UTC) and
   currency instead (Issue #248).  ``--csv`` also
-  writes those same rows to ``summary-<date>.csv`` (one column per summary
-  field, so a spreadsheet shows them side by side); omitted, the command only
-  prints, as before.  The range line is terminal output only: the file keeps
-  one row per summary row, with no range column and no range row.
+  writes those same rows to ``summary[-<grouping>]-<date>.csv`` (one column
+  per summary field, so a spreadsheet shows them side by side), naming the
+  grouping in the file name (Issue #372), so a plain and a grouped summary of
+  one day keep two files; omitted, the command only prints, as before.  The
+  range line is terminal output only: the file keeps one row per summary row,
+  with no range column and no range row.
   ``--quiet`` prints only the net total per currency (``USD 1,233.57``), one
   line per currency, so a script reads the net income without parsing the
   payments and refunds columns (Issue #260); the range line is left out
@@ -1077,6 +1079,28 @@ def _summary_range_line(first: object | None, last: object | None) -> str:
     return f"{SUMMARY_RANGE_LABEL} {_utc_day(first)}..{_utc_day(last)}"
 
 
+def _summary_csv_name(
+    *, by_month: bool = False, by_customer: bool = False
+) -> str:
+    """The summary CSV file name of this grouping (Issue #372).
+
+    No grouping writes ``summary-<date>.csv``; each grouping adds its flag
+    name to the file name, ``by-customer`` before ``by-month`` like the CSV
+    columns, so ``summary --by-customer --by-month --csv` writes
+    ``summary-by-customer-by-month-<date>.csv``.  A plain and a grouped run on
+    one UTC day therefore keep two files instead of replacing each other.
+    """
+    grouping = "".join(
+        f"-{flag}"
+        for flag, enabled in (
+            ("by-customer", by_customer),
+            ("by-month", by_month),
+        )
+        if enabled
+    )
+    return f"summary{grouping}-{export_date()}.csv"
+
+
 def write_summary_csv(
     rows: Sequence[dict],
     *,
@@ -1084,17 +1108,21 @@ def write_summary_csv(
     by_month: bool = False,
     by_customer: bool = False,
 ) -> Path:
-    """Write the summary rows to ``<output_dir>/summary-<date>.csv``.
+    """Write the summary rows to ``<output_dir>/summary[-<grouping>]-<date>.csv``.
 
     The file name carries the UTC export date like the ``export`` files do
-    (Issue #230), so two days of summaries do not overwrite each other.  With
-    ``by_month`` the rows carry a leading ``month`` column (Issue #248); with
-    ``by_customer`` a leading ``customer`` column (Issue #285), both when the
-    two groupings are combined.
+    (Issue #230), so two days of summaries do not overwrite each other, and the
+    grouping the columns follow (Issue #372), so a plain and a grouped summary
+    of one day do not either.  With ``by_month`` the rows carry a leading
+    ``month`` column (Issue #248); with ``by_customer`` a leading
+    ``customer`` column (Issue #285), both when the two groupings are
+    combined.
     """
     directory = Path(output_dir)
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"summary-{export_date()}.csv"
+    path = directory / _summary_csv_name(
+        by_month=by_month, by_customer=by_customer
+    )
     if by_customer and by_month:
         columns = SUMMARY_COLUMNS_BY_CUSTOMER_AND_MONTH
     elif by_customer:
@@ -1346,8 +1374,9 @@ def _parser() -> argparse.ArgumentParser:
         "--csv",
         action="store_true",
         help=(
-            "also write the printed rows to summary-<date>.csv "
-            f"(one column per summary field, in {DEFAULT_OUTPUT_DIR}/ by default)"
+            "also write the printed rows to summary[-<grouping>]-<date>.csv "
+            "(the file name carries --by-customer/--by-month, one column per "
+            f"summary field, in {DEFAULT_OUTPUT_DIR}/ by default)"
         ),
     )
     summary.add_argument(

@@ -1726,15 +1726,25 @@ SUMMARY_SAMPLE_LINES = [
 SUMMARY_TOTAL_LINE = "合计 付款 1,244.57 退款 1.00 净额 1,243.57"
 
 
-def _summary_csv_file(output_dir, date=EXPORT_DATE):
-    """The dated summary CSV, e.g. ``summary-2026-10-28.csv``."""
-    return output_dir / f"summary-{date}.csv"
+def _summary_csv_file(
+    output_dir, *, by_customer=False, by_month=False, date=EXPORT_DATE
+):
+    """The dated summary CSV, e.g. ``summary-by-month-2026-10-28.csv``."""
+    grouping = "".join(
+        f"-{flag}"
+        for flag, enabled in (
+            ("by-customer", by_customer),
+            ("by-month", by_month),
+        )
+        if enabled
+    )
+    return output_dir / f"summary{grouping}-{date}.csv"
 
 
-def _summary_csv_rows(output_dir, date=EXPORT_DATE):
+def _summary_csv_rows(output_dir, **grouping):
     return list(
         csv.reader(
-            _summary_csv_file(output_dir, date).open(
+            _summary_csv_file(output_dir, **grouping).open(
                 newline="", encoding="utf-8"
             )
         )
@@ -1902,6 +1912,140 @@ def test_summary_csv_without_records_writes_only_the_header(
         f"exported summary rows=0 to {_summary_csv_file(output_dir)}",
     ]
     assert _summary_csv_rows(output_dir) == [SUMMARY_CSV_HEADER]
+
+
+# Issue #372: the grouped summary CSV carries its grouping in the file name,
+# so a plain and a grouped run on the same UTC day keep two files.
+SUMMARY_CSV_GROUPING_NAMES = [
+    ("--by-month", False, True, "summary-by-month-{date}.csv"),
+    ("--by-customer", True, False, "summary-by-customer-{date}.csv"),
+    (
+        "--by-customer --by-month",
+        True,
+        True,
+        "summary-by-customer-by-month-{date}.csv",
+    ),
+]
+
+
+def test_plain_and_grouped_summary_csv_on_one_day_leave_two_files(
+    live_key, stripe_summary_lists, export_date, tmp_path, capsys
+):
+    """Acceptance: two same-day runs with different groupings keep both files."""
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            ["summary", "--csv", "--output-dir", str(output_dir)]
+        )
+        == 0
+    )
+    plain_notice = capsys.readouterr().out.splitlines()[-1]
+
+    assert (
+        stripe_payments.main(
+            [
+                "summary",
+                "--by-month",
+                "--csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+    grouped_notice = capsys.readouterr().out.splitlines()[-1]
+
+    plain_file = output_dir / f"summary-{EXPORT_DATE}.csv"
+    grouped_file = output_dir / f"summary-by-month-{EXPORT_DATE}.csv"
+    assert sorted(path.name for path in output_dir.iterdir()) == [
+        plain_file.name,
+        grouped_file.name,
+    ]
+    assert plain_notice == f"exported summary rows=2 to {plain_file}"
+    assert grouped_notice == f"exported summary rows=2 to {grouped_file}"
+    assert _summary_csv_rows(output_dir)[0] == SUMMARY_CSV_HEADER
+    assert _summary_csv_rows(output_dir, by_month=True)[0] == [
+        "月份",
+        "币种",
+        "付款",
+        "退款",
+        "净额",
+    ]
+
+
+@pytest.mark.parametrize(
+    "flags, by_customer, by_month, expected_name",
+    SUMMARY_CSV_GROUPING_NAMES,
+)
+def test_grouped_summary_csv_file_name_names_the_grouping(
+    live_key,
+    stripe_summary_lists,
+    export_date,
+    tmp_path,
+    capsys,
+    flags,
+    by_customer,
+    by_month,
+    expected_name,
+):
+    """Acceptance: --by-customer/--by-month show up in the written file name."""
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            [
+                "summary",
+                *flags.split(),
+                "--csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    path = output_dir / expected_name.format(date=EXPORT_DATE)
+    assert sorted(item.name for item in output_dir.iterdir()) == [path.name]
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        f"exported summary rows=2 to {path}"
+    )
+    assert _summary_csv_rows(
+        output_dir, by_customer=by_customer, by_month=by_month
+    )
+
+
+def test_grouped_summary_csv_without_records_writes_its_header_only_file(
+    live_key, stripe_api, export_date, tmp_path, capsys
+):
+    """Acceptance: a grouped run with no records still writes its own file."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(),
+        "/v1/refunds": _list_payload(),
+    }
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            [
+                "summary",
+                "--by-customer",
+                "--by-month",
+                "--csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    path = output_dir / f"summary-by-customer-by-month-{EXPORT_DATE}.csv"
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        f"exported summary rows=0 to {path}"
+    )
+    assert _summary_csv_rows(
+        output_dir, by_customer=True, by_month=True
+    ) == [["客户", "月份", "币种", "付款", "退款", "净额"]]
 
 
 def test_summary_without_the_csv_option_writes_no_file(
@@ -2225,9 +2369,10 @@ def test_summary_by_month_csv_adds_the_month_column(
     assert printed[-3] == BY_MONTH_LARGEST_LINE
     assert printed[-2] == BY_MONTH_SMALLEST_LINE
     assert printed[-1] == (
-        f"exported summary rows=5 to {_summary_csv_file(output_dir)}"
+        f"exported summary rows=5 to "
+        f"{_summary_csv_file(output_dir, by_month=True)}"
     )
-    assert _summary_csv_rows(output_dir) == [
+    assert _summary_csv_rows(output_dir, by_month=True) == [
         ["月份", "币种", "付款", "退款", "净额"],
         ["2026-09", "EUR", "0.00", "2.00", "-2.00"],
         ["2026-09", "JPY", "500", "0", "500"],
@@ -3314,9 +3459,10 @@ def test_summary_by_customer_csv_adds_the_customer_column(
     assert printed[-3] == BY_CUSTOMER_LARGEST_LINE
     assert printed[-2] == BY_CUSTOMER_SMALLEST_LINE
     assert printed[-1] == (
-        f"exported summary rows=3 to {_summary_csv_file(output_dir)}"
+        f"exported summary rows=3 to "
+        f"{_summary_csv_file(output_dir, by_customer=True)}"
     )
-    assert _summary_csv_rows(output_dir) == [
+    assert _summary_csv_rows(output_dir, by_customer=True) == [
         ["客户", "币种", "付款", "退款", "净额"],
         ["cus_alpha", "USD", "1,234.57", "1.00", "1,233.57"],
         ["cus_beta", "EUR", "10.00", "0.00", "10.00"],
@@ -3398,7 +3544,9 @@ def test_summary_by_customer_by_month_csv_has_customer_and_month_columns(
         == 0
     )
 
-    assert _summary_csv_rows(output_dir) == [
+    assert _summary_csv_rows(
+        output_dir, by_customer=True, by_month=True
+    ) == [
         ["客户", "月份", "币种", "付款", "退款", "净额"],
         ["cus_alpha", "2026-09", "USD", "10.00", "0.00", "10.00"],
     ]
@@ -5944,6 +6092,53 @@ def test_module_summary_by_month_adds_up_to_the_plain_summary(
         "最大单笔金额 10.00",
         "最小单笔金额 1.00",
     ]
+
+
+def test_module_plain_and_grouped_summary_csv_keep_two_files(
+    local_stripe_server, tmp_path
+):
+    """Issue #372 Acceptance: the real commands leave two files in one day."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _by_month_intent("pi_1", 1000, "usd", _utc(2026, 9, 10, 12)),
+            _by_month_intent("pi_2", 700, "usd", _utc(2026, 10, 6, 12)),
+        ),
+        "/v1/refunds": _list_payload(),
+    }
+    output_dir = tmp_path / "export"
+
+    plain = _run_module_command(
+        server, ["summary", "--csv", "--output-dir", str(output_dir)],
+        tmp_path,
+    )
+    grouped = _run_module_command(
+        server,
+        ["summary", "--by-month", "--csv", "--output-dir", str(output_dir)],
+        tmp_path,
+    )
+
+    assert plain.returncode == 0, plain.stderr
+    assert grouped.returncode == 0, grouped.stderr
+    date = stripe_payments.export_date()
+    plain_file = output_dir / f"summary-{date}.csv"
+    grouped_file = output_dir / f"summary-by-month-{date}.csv"
+    assert sorted(path.name for path in output_dir.iterdir()) == [
+        plain_file.name,
+        grouped_file.name,
+    ]
+    assert plain.stdout.splitlines()[-1] == (
+        f"exported summary rows=1 to {plain_file}"
+    )
+    assert grouped.stdout.splitlines()[-1] == (
+        f"exported summary rows=2 to {grouped_file}"
+    )
+    assert plain_file.read_text(encoding="utf-8").splitlines()[0] == (
+        "币种,付款,退款,净额"
+    )
+    assert grouped_file.read_text(encoding="utf-8").splitlines()[0] == (
+        "月份,币种,付款,退款,净额"
+    )
 
 
 # --- refunds-summary real entry point (Issue #275) ----------------------
