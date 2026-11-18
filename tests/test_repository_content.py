@@ -114,8 +114,11 @@ README_ENGINE_CHECK_LINE = "Engine check: v0.7.44 (2026-11-16)"
 # Issue #339 appends this exact line as the README final line; Issue #341
 # appends the new engine check line after it, so it stays in the README.
 README_CLOUD_CHECK_LINE = "Cloud check: v0.8.58 (2026-11-16)"
-# Issue #341 appends this exact line as the new README final line.
-README_LAST_LINE = "Engine check: v0.7.45 (2026-11-16)"
+# Issue #341 appends this exact line as the README final line; Issue #343
+# appends the trial check line after it, so it stays in the README.
+README_ENGINE_CHECK_V0745_LINE = "Engine check: v0.7.45 (2026-11-16)"
+# Issue #343 appends this exact line as the new README final line.
+README_LAST_LINE = "Trial check (2026-11-18)"
 ISSUE_TEMPLATE_SECTIONS = (
     "## User outcome",
     "## Preconditions",
@@ -350,7 +353,7 @@ def test_readme_states_the_test_command_up_front():
 
 
 def test_readme_ends_with_the_beta_acceptance_note():
-    """Issue #341: the README ends with the engine check line."""
+    """Issue #343: the README ends with the trial check line."""
     lines = [line for line in _read(README).splitlines() if line.strip()]
     assert lines[-1] == README_LAST_LINE, (
         f"the README must end with the {README_LAST_LINE!r} line, "
@@ -366,6 +369,11 @@ def test_readme_ends_with_the_beta_acceptance_note():
     # one, so appending the engine check line does not drop it.
     assert README_CLOUD_CHECK_LINE in lines, (
         f"the README must still carry the {README_CLOUD_CHECK_LINE!r} line"
+    )
+    # Issue #341's engine check line stays in the README, right above the new
+    # one, so appending the trial check line does not drop it.
+    assert README_ENGINE_CHECK_V0745_LINE in lines, (
+        f"the README must still carry the {README_ENGINE_CHECK_V0745_LINE!r} line"
     )
     # Issue #335's `Last checked:` note stays in the README, right above the
     # new one, so appending the engine check line does not drop it.
