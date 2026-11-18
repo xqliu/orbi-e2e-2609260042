@@ -7517,30 +7517,216 @@ def test_summary_days_skips_non_succeeded_records(
     ] == [[str(DAYS_30_CUTOFF)], [str(DAYS_30_CUTOFF)]]
 
 
-def test_refunds_summary_still_counts_every_refund_status(
+# --- refunds-summary counts only succeeded refunds (Issue #352) ----------
+#
+# `refunds-summary` reads the same scope as `summary` (Issue #318): only a
+# refund Stripe reports as `succeeded` reaches a week row, the `合计` line or
+# a CSV row, so both commands agree on the refunds of one window.
+#
+# The account below has succeeded usd refunds in 2026-W40 and 2026-W44, a
+# succeeded jpy refund (zero-decimal, so the parity test covers the unit
+# conversion), a pending and a failed refund in 2026-W44, and a week (2026-W43)
+# whose only refund is canceled, so that week must print no row at all.
+REFUNDS_SUMMARY_SUCCEEDED_LINES = [
+    "2026-W40 usd 退款 1 笔 1.00",
+    "2026-W44 jpy 退款 1 笔 500",
+    "2026-W44 usd 退款 2 笔 3.50",
+]
+REFUNDS_SUMMARY_SUCCEEDED_TOTAL_LINE = "合计 退款 4 笔 504.50"
+
+
+def _status_mixed_refunds():
+    return _list_payload(
+        _refund_on("re_ok_w40", 100, "usd", _utc(2026, 9, 28)),
+        _refund_on("re_ok_w44_a", 250, "usd", _utc(2026, 10, 28)),
+        _refund_on("re_ok_w44_b", 100, "usd", _utc(2026, 10, 30)),
+        _refund_on("re_ok_w44_jpy", 500, "jpy", _utc(2026, 10, 28)),
+        _with_status(
+            _refund_on("re_pending_w44", 700, "usd", _utc(2026, 10, 28)),
+            "pending",
+        ),
+        _with_status(
+            _refund_on("re_failed_w44", 900, "eur", _utc(2026, 10, 28)),
+            "failed",
+        ),
+        _with_status(
+            _refund_on("re_canceled_w43", 500, "usd", _utc(2026, 10, 19)),
+            "canceled",
+        ),
+    )
+
+
+def test_refunds_summary_counts_only_succeeded_refunds(
     live_key, stripe_api, capsys
 ):
-    """Issue #318 assumption: ``refunds-summary`` keeps its whole scope."""
-    stripe_api.list_payloads = {
-        "/v1/refunds": _list_payload(
-            _refund_on("re_ok", 1000, "usd", _utc(2026, 10, 28)),
-            _with_status(
-                _refund_on("re_pending", 100, "usd", _utc(2026, 10, 28)),
-                "pending",
-            ),
-            _with_status(
-                _refund_on("re_failed", 500, "usd", _utc(2026, 10, 28)),
-                "failed",
-            ),
-        ),
-    }
+    """Issue #352 Acceptance: week rows and the total skip other statuses."""
+    stripe_api.list_payloads = {"/v1/refunds": _status_mixed_refunds()}
 
     assert stripe_payments.main(["refunds-summary"]) == 0
     assert capsys.readouterr().out.splitlines() == [
-        "2026-W44 usd 退款 3 笔 16.00",
-        # Issue #319: the closing line totals the printed rows; the scope is
-        # still every refund status, so all three records stay counted.
-        "合计 退款 3 笔 16.00",
+        *REFUNDS_SUMMARY_SUCCEEDED_LINES,
+        REFUNDS_SUMMARY_SUCCEEDED_TOTAL_LINE,
+    ]
+
+
+def test_refunds_summary_csv_rows_skip_non_succeeded_refunds(
+    live_key, stripe_api, export_date, tmp_path, capsys
+):
+    """Issue #352 Acceptance: the CSV data rows carry succeeded refunds only."""
+    stripe_api.list_payloads = {"/v1/refunds": _status_mixed_refunds()}
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            ["refunds-summary", "--csv", "--output-dir", str(output_dir)]
+        )
+        == 0
+    )
+
+    assert capsys.readouterr().out.splitlines() == [
+        *REFUNDS_SUMMARY_SUCCEEDED_LINES,
+        REFUNDS_SUMMARY_SUCCEEDED_TOTAL_LINE,
+        _refunds_summary_hint(3, _refunds_summary_csv_file(output_dir)),
+    ]
+    assert _refunds_summary_csv_rows(output_dir) == [
+        REFUNDS_SUMMARY_CSV_HEADER,
+        ["2026-W40", "usd", "1", "1.00"],
+        ["2026-W44", "jpy", "1", "500"],
+        ["2026-W44", "usd", "2", "3.50"],
+    ]
+
+
+SUMMARY_TOTAL_REFUNDS_RE = re.compile(
+    r"^合计 付款 (?:-?[\d,]+\.\d{2}) 退款 (?P<amount>-?[\d,]+\.\d{2}) "
+)
+REFUNDS_SUMMARY_TOTAL_RE = re.compile(
+    r"^合计 退款 (?P<count>\d+) 笔 (?P<amount>-?[\d,]+\.\d{2})$"
+)
+
+
+def _printed_hundredths(text):
+    """A printed `1,234.56` amount in hundredths."""
+    return int(round(float(text.replace(",", "")) * 100))
+
+
+def _summary_total_refunds(lines):
+    """The refund value of the `summary` `合计` line, in hundredths."""
+    match = next(
+        SUMMARY_TOTAL_REFUNDS_RE.match(line)
+        for line in lines
+        if line.startswith("合计 付款 ")
+    )
+    return _printed_hundredths(match["amount"])
+
+
+def _refunds_summary_total(lines):
+    """The (count, amount in hundredths) of the `refunds-summary` total."""
+    match = REFUNDS_SUMMARY_TOTAL_RE.match(lines[-1])
+    assert match, f"unexpected refunds-summary total line: {lines[-1]!r}"
+    return int(match["count"]), _printed_hundredths(match["amount"])
+
+
+def test_refunds_summary_total_matches_summary_refunds(
+    live_key, stripe_api, capsys
+):
+    """Issue #352 Acceptance: both commands total the same window's refunds."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(),
+        "/v1/refunds": _status_mixed_refunds(),
+    }
+
+    assert stripe_payments.main(["summary"]) == 0
+    summary_lines = capsys.readouterr().out.splitlines()
+    assert stripe_payments.main(["refunds-summary"]) == 0
+    refund_lines = capsys.readouterr().out.splitlines()
+
+    # 1.00 + 3.50 usd plus 500 jpy, the zero-decimal amount in the unit the
+    # summary's 合计 line prints, so the two printed totals are equal.
+    assert _refunds_summary_total(refund_lines) == (4, 50450)
+    assert _summary_total_refunds(summary_lines) == 50450
+
+
+def test_refunds_summary_currency_filter_applies_after_status_filter(
+    live_key, stripe_api, capsys
+):
+    """Issue #352 Acceptance: only that currency's succeeded week rows print."""
+    stripe_api.list_payloads = {"/v1/refunds": _status_mixed_refunds()}
+
+    assert stripe_payments.main(["refunds-summary", "--currency", "usd"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "2026-W40 usd 退款 1 笔 1.00",
+        "2026-W44 usd 退款 2 笔 3.50",
+    ]
+
+
+def test_refunds_summary_prints_nothing_without_succeeded_refunds(
+    live_key, stripe_api, capsys
+):
+    """Issue #352 Acceptance: no succeeded refund -> no row, no total."""
+    stripe_api.list_payloads = {
+        "/v1/refunds": _list_payload(
+            _with_status(
+                _refund_on("re_pending", 700, "usd", _utc(2026, 10, 28)),
+                "pending",
+            ),
+            _with_status(
+                _refund_on("re_failed", 900, "usd", _utc(2026, 10, 30)),
+                "failed",
+            ),
+            _with_status(
+                _refund_on("re_canceled", 500, "usd", _utc(2026, 10, 19)),
+                "canceled",
+            ),
+        )
+    }
+
+    assert stripe_payments.main(["refunds-summary"]) == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_refunds_summary_csv_without_succeeded_refunds_writes_the_header(
+    live_key, stripe_api, export_date, tmp_path, capsys
+):
+    """Issue #352 Acceptance: --csv writes only the header and exits 0."""
+    stripe_api.list_payloads = {
+        "/v1/refunds": _list_payload(
+            _with_status(
+                _refund_on("re_pending", 700, "usd", _utc(2026, 10, 28)),
+                "pending",
+            ),
+        )
+    }
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            ["refunds-summary", "--csv", "--output-dir", str(output_dir)]
+        )
+        == 0
+    )
+
+    assert capsys.readouterr().out.splitlines() == [
+        _refunds_summary_hint(0, _refunds_summary_csv_file(output_dir))
+    ]
+    assert _refunds_summary_csv_rows(output_dir) == [
+        REFUNDS_SUMMARY_CSV_HEADER
+    ]
+
+
+def test_module_refunds_summary_counts_only_succeeded_refunds(
+    local_stripe_server, tmp_path
+):
+    """The real user command: `python -m stripe_payments refunds-summary`."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {"/v1/refunds": _status_mixed_refunds()}
+
+    result = _run_module_command(server, ["refunds-summary"], tmp_path)
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.splitlines() == [
+        *REFUNDS_SUMMARY_SUCCEEDED_LINES,
+        REFUNDS_SUMMARY_SUCCEEDED_TOTAL_LINE,
     ]
 
 

@@ -1197,6 +1197,38 @@ def test_readme_documents_the_refunds_summary_window_csv_rows():
     )
 
 
+# Issue #352: `refunds-summary` counts only succeeded refunds, the same scope
+# as `summary`, so both README sections describe one refund scope and the
+# changelog records the change under [Unreleased].
+def test_readme_documents_the_refunds_summary_succeeded_scope():
+    body = _readme_subsection(README_REFUNDS_SUMMARY_HEADING)
+    # The paragraph wraps, so the sentence is checked on one line.
+    unwrapped = body.replace("\n", "")
+    assert "只统计 Stripe 状态为 `succeeded` 的退款" in unwrapped, (
+        f"the {README_REFUNDS_SUMMARY_HEADING!r} section must state the "
+        "succeeded-only refund scope shared with `summary`"
+    )
+    # The statuses the command drops are named, so the reader knows what
+    # stays out of the week rows, the total and the CSV.
+    for status in ("`pending`", "`failed`", "`canceled`"):
+        assert status in unwrapped, (
+            f"the {README_REFUNDS_SUMMARY_HEADING!r} section must name the "
+            f"{status} refunds it leaves out"
+        )
+    # The old claim is gone: the README must not describe the drift the code
+    # no longer has.
+    assert "统计范围不变" not in _read(README)
+    unreleased = _read(CHANGELOG).split("## [Unreleased]", 1)[1].split(
+        "\n## ", 1
+    )[0]
+    assert "只统计 Stripe 状态为 `succeeded` 的退款" in unreleased.replace(
+        "\n", ""
+    ), (
+        "CHANGELOG.md must record the succeeded-only refunds-summary scope "
+        "under [Unreleased]"
+    )
+
+
 # Issue #257: the `test (20)` / `test (22)` base-branch checks only exist
 # because the CI `test` job runs the repository entry point once per supported
 # Node.js major version.  A missing matrix or a missing run step would leave
