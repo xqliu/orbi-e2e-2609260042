@@ -924,4 +924,5 @@ Cloud check: v0.8.58 (2026-11-16)
 Engine check: v0.7.45 (2026-11-16)
 Trial check (2026-11-18)
 See CONTRIBUTING notes in the issues.
+Version moves are tested on beta.
 测试命令：`python -m pytest`
