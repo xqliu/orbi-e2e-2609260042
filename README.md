@@ -893,6 +893,10 @@ Wake test 10-05
 
 本仓库用于 Orbi Cloud 每次发版前的新用户全流程验收（v0.7.12，2026-10-07）
 
+## Running the tests
+
+`python -m pytest` runs the whole test suite.
+
 ## 运行测试
 
 在仓库根目录执行下面的命令，它会用 pytest 运行 `tests/` 下的全部测试
