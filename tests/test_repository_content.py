@@ -159,6 +159,10 @@ README_TESTS_COMMAND = "python3 -m unittest discover -s tests -v"
 README_RUN_TESTS_HEADING = "## 运行测试"
 README_RUN_TESTS_COMMAND = "python -m pytest"
 README_RUN_TESTS_DEPENDENCIES = "python -m pip install pytest stripe"
+# Issue #396: one English 「Running the tests」 section answers "which single
+# command runs the whole suite?" on one line, with the CI entry point.
+README_RUNNING_TESTS_HEADING = "## Running the tests"
+README_RUNNING_TESTS_COMMAND = "python -m pytest"
 # Issue #277: one line in the README intro states how to run the tests, so a
 # reader sees the command on the first screen; it links to the detailed
 # 「运行测试」 section.
@@ -321,6 +325,36 @@ def test_readme_documents_the_missing_pytest_repair():
     assert README_RUN_TESTS_DEPENDENCIES in body, (
         f"the {README_RUN_TESTS_HEADING!r} section must show the repair "
         f"command {README_RUN_TESTS_DEPENDENCIES!r}"
+    )
+
+
+def test_readme_has_a_one_line_running_the_tests_section():
+    """Issue #396: one line names the single command that runs the suite."""
+    text = _read(README)
+    assert f"\n{README_RUNNING_TESTS_HEADING}\n" in text, (
+        f"the README needs a {README_RUNNING_TESTS_HEADING!r} section"
+    )
+    body = text.split(f"\n{README_RUNNING_TESTS_HEADING}\n", 1)[1]
+    body = body.split("\n## ", 1)[0]
+    # The body directly below the heading is a single line: no code fence and
+    # no second paragraph a reader would have to choose between.
+    body_lines = [line.strip() for line in body.splitlines() if line.strip()]
+    assert len(body_lines) == 1, (
+        f"the {README_RUNNING_TESTS_HEADING!r} section body must be exactly "
+        f"one non-empty line, got {body_lines!r}"
+    )
+    assert README_RUNNING_TESTS_COMMAND in body_lines[0], (
+        f"the {README_RUNNING_TESTS_HEADING!r} line must name "
+        f"{README_RUNNING_TESTS_COMMAND!r}"
+    )
+    assert "```" not in body, (
+        f"the {README_RUNNING_TESTS_HEADING!r} section needs no fenced code "
+        "block"
+    )
+    # The documented command is the entry point of the CI Run tests step, so
+    # this section cannot drift away from the real test command.
+    assert README_RUNNING_TESTS_COMMAND in _read(WORKFLOW), (
+        f"the CI Run tests step must use {README_RUNNING_TESTS_COMMAND!r}"
     )
 
 
