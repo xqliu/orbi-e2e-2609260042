@@ -29,6 +29,10 @@ CODE_OF_CONDUCT_HEADING = "# Code of Conduct"
 # Issue #380: the support page tells readers where to get help.
 SUPPORT_PAGE = REPO_ROOT / "docs" / "SUPPORT.md"
 SUPPORT_HEADING = "# Support"
+# Issue #382: the glossary explains the words the README uses.
+GLOSSARY_PAGE = REPO_ROOT / "docs" / "GLOSSARY.md"
+GLOSSARY_HEADING = "# Glossary"
+GLOSSARY_TERM_PREFIX = "## "
 
 
 def _utc(*parts):
@@ -1429,3 +1433,30 @@ def test_docs_has_a_support_page():
     assert "SECURITY.md" in body, (
         "docs/SUPPORT.md must point security reports at SECURITY.md"
     )
+
+
+def test_docs_has_a_glossary_page():
+    """Issue #382: docs/GLOSSARY.md defines at least three README words."""
+    lines = _read(GLOSSARY_PAGE).splitlines()
+    assert lines[0] == GLOSSARY_HEADING, (
+        f"docs/GLOSSARY.md must open with {GLOSSARY_HEADING!r}, "
+        f"got {lines[0]!r}"
+    )
+    # Each term is a level-two heading, so the page really has one entry per
+    # word instead of a heading plus prose only.
+    terms = [
+        line[len(GLOSSARY_TERM_PREFIX):].strip()
+        for line in lines
+        if line.startswith(GLOSSARY_TERM_PREFIX)
+    ]
+    assert len(terms) >= 3, (
+        f"docs/GLOSSARY.md must define at least 3 terms, got {len(terms)}: "
+        f"{terms}"
+    )
+    # The page explains words the README actually uses, so every entry must
+    # be findable in the README instead of inventing its own vocabulary.
+    readme = _read(README)
+    for term in terms:
+        assert term and term in readme, (
+            f"docs/GLOSSARY.md term {term!r} must appear in README.md"
+        )
