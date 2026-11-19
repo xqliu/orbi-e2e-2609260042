@@ -1,5 +1,7 @@
 # Code of Conduct
 
+一句话：请保持善意与尊重，对事不对人。
+
 本页是本仓库（含 `stripe_payments.py`、文档与 CI 配置）的行为准则，适用于 Issue、
 Pull Request、评论等所有仓库空间。
 
