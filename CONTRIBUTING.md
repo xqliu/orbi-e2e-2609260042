@@ -6,6 +6,8 @@
 
 提 PR 前先本地跑一遍测试
 
+Pull requests need a passing test run: run `python -m pytest` before you open a pull request and make sure the summary reports no `failed`.
+
 ## Running the tests
 
 The test runner is `pytest`. From the repository root, install it (the suite
