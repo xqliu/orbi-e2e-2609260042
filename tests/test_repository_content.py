@@ -26,6 +26,9 @@ CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 # Issue #375: the repository ships a short code of conduct page under docs/.
 CODE_OF_CONDUCT = REPO_ROOT / "docs" / "CODE_OF_CONDUCT.md"
 CODE_OF_CONDUCT_HEADING = "# Code of Conduct"
+# Issue #380: the support page tells readers where to get help.
+SUPPORT_PAGE = REPO_ROOT / "docs" / "SUPPORT.md"
+SUPPORT_HEADING = "# Support"
 
 
 def _utc(*parts):
@@ -1407,4 +1410,22 @@ def test_docs_has_a_code_of_conduct_page():
     # tells the reader what behaviour is expected.
     assert any(line.strip() for line in lines[1:]), (
         "docs/CODE_OF_CONDUCT.md must have a body below the heading"
+    )
+
+
+def test_docs_has_a_support_page():
+    """Issue #380: docs/SUPPORT.md opens with the required heading."""
+    lines = _read(SUPPORT_PAGE).splitlines()
+    assert lines[0] == SUPPORT_HEADING, (
+        f"docs/SUPPORT.md must open with {SUPPORT_HEADING!r}, "
+        f"got {lines[0]!r}"
+    )
+    # A heading alone does not help anyone: the page must say where to ask,
+    # and security reports must not be sent to the public issue tracker.
+    body = "\n".join(lines[1:])
+    assert any(line.strip() for line in lines[1:]), (
+        "docs/SUPPORT.md must have a body below the heading"
+    )
+    assert "SECURITY.md" in body, (
+        "docs/SUPPORT.md must point security reports at SECURITY.md"
     )
