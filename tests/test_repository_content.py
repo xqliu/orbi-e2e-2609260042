@@ -39,6 +39,10 @@ CONTRIBUTOR_FAQ_PAGE = REPO_ROOT / "docs" / "CONTRIBUTOR-FAQ.md"
 CONTRIBUTOR_FAQ_HEADING = "# Contributor FAQ"
 CONTRIBUTOR_INSTALL_COMMAND = "python -m pip install pytest stripe"
 CONTRIBUTOR_TEST_COMMAND = "python -m pytest"
+# Issue #389: the security contact page says how to report a vulnerability.
+SECURITY_CONTACT_PAGE = REPO_ROOT / "docs" / "SECURITY-CONTACT.md"
+SECURITY_CONTACT_HEADING = "# Security contact"
+SECURITY_PAGE = REPO_ROOT / "SECURITY.md"
 # Relative markdown links (no scheme, no in-page anchor) must resolve to a
 # file that really exists in the repository.
 MARKDOWN_LINK_RE = re.compile(r"\]\((?!https?://|#)([^)#]+)")
@@ -1550,6 +1554,55 @@ def test_contributor_faq_shows_the_real_test_commands_and_repair():
     assert "No module named pytest" in body, (
         "docs/CONTRIBUTOR-FAQ.md must name the missing-pytest failure message"
     )
+
+
+def test_docs_has_a_security_contact_page():
+    """Issue #389: docs/SECURITY-CONTACT.md opens with the required heading."""
+    lines = _read(SECURITY_CONTACT_PAGE).splitlines()
+    assert lines[0] == SECURITY_CONTACT_HEADING, (
+        f"docs/SECURITY-CONTACT.md must open with "
+        f"{SECURITY_CONTACT_HEADING!r}, got {lines[0]!r}"
+    )
+    assert any(line.strip() for line in lines[1:]), (
+        "docs/SECURITY-CONTACT.md must have a body below the heading"
+    )
+
+
+def test_security_contact_page_says_how_to_report():
+    """Issue #389: the page names the private channel SECURITY.md documents."""
+    body = _read(SECURITY_CONTACT_PAGE)
+    security = _read(SECURITY_PAGE)
+    # SECURITY.md is the canonical reporting channel, so the page cannot
+    # dead-end on "contact the maintainer" without telling the reader where.
+    address = re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", security)
+    assert address is not None, "SECURITY.md must name the reporting address"
+    assert address.group(0) in body, (
+        "docs/SECURITY-CONTACT.md must name the reporting address "
+        f"{address.group(0)!r} that SECURITY.md documents"
+    )
+    # The report must stay private instead of landing in the public tracker.
+    assert "SECURITY.md" in body, (
+        "docs/SECURITY-CONTACT.md must point at SECURITY.md for the details"
+    )
+    unwrapped = body.replace("\n", "")
+    assert "不要开公开 Issue" in unwrapped, (
+        "docs/SECURITY-CONTACT.md must say the report is not a public Issue"
+    )
+
+
+def test_security_contact_page_relative_links_resolve():
+    """Issue #389: every link on the security contact page really resolves."""
+    text = _read(SECURITY_CONTACT_PAGE)
+    targets = MARKDOWN_LINK_RE.findall(text)
+    assert targets, (
+        "docs/SECURITY-CONTACT.md must link the page that has the details"
+    )
+    for target in targets:
+        resolved = (SECURITY_CONTACT_PAGE.parent / target.strip()).resolve()
+        assert resolved.is_file(), (
+            f"docs/SECURITY-CONTACT.md links {target!r}, but that file is "
+            "missing"
+        )
 
 
 def test_contributor_faq_relative_links_resolve():
