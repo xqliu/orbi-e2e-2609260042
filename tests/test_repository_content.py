@@ -1596,3 +1596,35 @@ def test_contributor_faq_relative_links_resolve():
         assert resolved.is_file(), (
             f"docs/CONTRIBUTOR-FAQ.md links {target!r}, but that file is missing"
         )
+
+
+# Issue #403: the two pull-request rules are a numbered list under `## Rules`.
+CONTRIBUTING = REPO_ROOT / "CONTRIBUTING.md"
+CONTRIBUTING_RULES_HEADING = "## Rules"
+CONTRIBUTING_RULES = (
+    "Commit messages are written in English.",
+    "Pull requests need a passing test run: run `python -m pytest` before you "
+    "open a pull request and make sure the summary reports no `failed`.",
+)
+
+
+def test_contributing_presents_the_pull_request_rules_as_a_numbered_list():
+    """Issue #403: the rules are a numbered list under a `## Rules` heading."""
+    text = _read(CONTRIBUTING)
+    block = "\n".join(
+        [
+            CONTRIBUTING_RULES_HEADING,
+            "",
+            f"1. {CONTRIBUTING_RULES[0]}",
+            f"2. {CONTRIBUTING_RULES[1]}",
+        ]
+    )
+    assert block in text, (
+        "CONTRIBUTING.md must show the two pull-request rules as a 1./2. "
+        f"numbered list under {CONTRIBUTING_RULES_HEADING!r}"
+    )
+    standalone = text.splitlines()
+    for rule in CONTRIBUTING_RULES:
+        assert rule not in standalone, (
+            f"the rule {rule!r} must not stay a standalone paragraph"
+        )

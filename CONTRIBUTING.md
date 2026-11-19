@@ -6,9 +6,10 @@
 
 提 PR 前先本地跑一遍测试
 
-Commit messages are written in English.
+## Rules
 
-Pull requests need a passing test run: run `python -m pytest` before you open a pull request and make sure the summary reports no `failed`.
+1. Commit messages are written in English.
+2. Pull requests need a passing test run: run `python -m pytest` before you open a pull request and make sure the summary reports no `failed`.
 
 ## Running the tests
 
