@@ -33,6 +33,15 @@ SUPPORT_HEADING = "# Support"
 GLOSSARY_PAGE = REPO_ROOT / "docs" / "GLOSSARY.md"
 GLOSSARY_HEADING = "# Glossary"
 GLOSSARY_TERM_PREFIX = "## "
+# Issue #386: the contributor FAQ answers the first three questions a new
+# contributor asks, and every answer names the real entry point.
+CONTRIBUTOR_FAQ_PAGE = REPO_ROOT / "docs" / "CONTRIBUTOR-FAQ.md"
+CONTRIBUTOR_FAQ_HEADING = "# Contributor FAQ"
+CONTRIBUTOR_INSTALL_COMMAND = "python -m pip install pytest stripe"
+CONTRIBUTOR_TEST_COMMAND = "python -m pytest"
+# Relative markdown links (no scheme, no in-page anchor) must resolve to a
+# file that really exists in the repository.
+MARKDOWN_LINK_RE = re.compile(r"\]\((?!https?://|#)([^)#]+)")
 
 
 def _utc(*parts):
@@ -1459,4 +1468,97 @@ def test_docs_has_a_glossary_page():
     for term in terms:
         assert term and term in readme, (
             f"docs/GLOSSARY.md term {term!r} must appear in README.md"
+        )
+
+
+def test_docs_has_a_contributor_faq_page():
+    """Issue #386: docs/CONTRIBUTOR-FAQ.md answers three contributor questions."""
+    lines = _read(CONTRIBUTOR_FAQ_PAGE).splitlines()
+    assert lines[0] == CONTRIBUTOR_FAQ_HEADING, (
+        f"docs/CONTRIBUTOR-FAQ.md must open with {CONTRIBUTOR_FAQ_HEADING!r}, "
+        f"got {lines[0]!r}"
+    )
+    assert any(line.strip() for line in lines[1:]), (
+        "docs/CONTRIBUTOR-FAQ.md must have a body below the heading"
+    )
+    # Each question is a level-two heading, and the page answers exactly three
+    # of them, so a heading alone cannot pass for an answer.
+    questions = [
+        line[len(GLOSSARY_TERM_PREFIX):].strip()
+        for line in lines
+        if line.startswith(GLOSSARY_TERM_PREFIX)
+    ]
+    assert len(questions) == 3, (
+        f"docs/CONTRIBUTOR-FAQ.md must ask 3 questions, got {len(questions)}: "
+        f"{questions}"
+    )
+    for question in questions:
+        assert question.endswith("？"), (
+            f"docs/CONTRIBUTOR-FAQ.md entry {question!r} must be a question"
+        )
+
+
+def test_contributor_faq_answers_through_the_real_contribution_channel():
+    """Issue #386: the FAQ repeats the repository's no-PR contribution rule."""
+    body = _read(CONTRIBUTOR_FAQ_PAGE).replace("\n", "")
+    contributing = _read(REPO_ROOT / "CONTRIBUTING.md").replace("\n", "")
+    # CONTRIBUTING.md is the canonical rule, so the FAQ cannot promise a pull
+    # request channel the repository does not accept.
+    assert "不接受 pull request" in contributing, (
+        "CONTRIBUTING.md must stay the canonical no-PR contribution rule"
+    )
+    assert "不接受 pull request" in body, (
+        "docs/CONTRIBUTOR-FAQ.md must say the repository takes no pull request"
+    )
+    assert "通过 Issue 提出" in body, (
+        "docs/CONTRIBUTOR-FAQ.md must point contributors at the Issue tracker"
+    )
+    assert "通过 Issue 提出" in contributing, (
+        "CONTRIBUTING.md must stay the canonical Issue channel the FAQ repeats"
+    )
+    # Both templates are named by the path a contributor really opens, and the
+    # files exist.
+    for template in (ISSUE_TEMPLATE, FEATURE_REQUEST_TEMPLATE):
+        assert template.is_file(), f"{template.relative_to(REPO_ROOT)} is missing"
+        assert template.relative_to(REPO_ROOT).as_posix() in body, (
+            "docs/CONTRIBUTOR-FAQ.md must name "
+            f"{template.relative_to(REPO_ROOT).as_posix()!r}"
+        )
+
+
+def test_contributor_faq_shows_the_real_test_commands_and_repair():
+    """Issue #386: the FAQ shows the commands CONTRIBUTING.md and CI run."""
+    body = _read(CONTRIBUTOR_FAQ_PAGE)
+    contributing = _read(REPO_ROOT / "CONTRIBUTING.md")
+    assert CONTRIBUTOR_INSTALL_COMMAND in body, (
+        f"docs/CONTRIBUTOR-FAQ.md must show {CONTRIBUTOR_INSTALL_COMMAND!r}"
+    )
+    assert CONTRIBUTOR_TEST_COMMAND in body, (
+        f"docs/CONTRIBUTOR-FAQ.md must show {CONTRIBUTOR_TEST_COMMAND!r}"
+    )
+    # The documented commands are the contributor commands, so the FAQ cannot
+    # drift away from the real test entry point.
+    for command in (CONTRIBUTOR_INSTALL_COMMAND, CONTRIBUTOR_TEST_COMMAND):
+        assert command in contributing, (
+            f"CONTRIBUTING.md must document {command!r}"
+        )
+    assert CONTRIBUTOR_TEST_COMMAND in _read(WORKFLOW), (
+        f"the CI Run tests step must run {CONTRIBUTOR_TEST_COMMAND!r}"
+    )
+    # The failure path and its repair are documented, so a first run that fails
+    # on a missing dependency has an answer instead of a silent dead end.
+    assert "No module named pytest" in body, (
+        "docs/CONTRIBUTOR-FAQ.md must name the missing-pytest failure message"
+    )
+
+
+def test_contributor_faq_relative_links_resolve():
+    """Issue #386: every link on the FAQ page leads to a file that exists."""
+    text = _read(CONTRIBUTOR_FAQ_PAGE)
+    targets = MARKDOWN_LINK_RE.findall(text)
+    assert targets, "docs/CONTRIBUTOR-FAQ.md must link the pages it refers to"
+    for target in targets:
+        resolved = (CONTRIBUTOR_FAQ_PAGE.parent / target.strip()).resolve()
+        assert resolved.is_file(), (
+            f"docs/CONTRIBUTOR-FAQ.md links {target!r}, but that file is missing"
         )
