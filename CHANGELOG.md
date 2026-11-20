@@ -123,6 +123,13 @@
   打印真实范围；`--days`、`--since`、`--until` 打印窗口内记录的范围，`--currency`、
   `--top` 只挑行、不影响这一行，`--quiet` 和 `--csv` 写出的文件里都没有这一行；
   一笔记录都没有时只打印 `统计范围 无记录` 并以退出码 0 结束，其余输出内容与顺序不变。
+- `export` 子命令新增 `--days N`：只导出最近 N×24 小时内（按记录 `created`，
+  含边界，如 `export --days 30 --format csv`）创建的付款、退款和客户记录，窗口
+  与校验和 `summary --days N`、`refunds-summary --days N` 完全一致，三个列表都通过
+  Stripe 的 `created[gte]` 过滤参数下推，文件和末行计数都只覆盖窗口内记录；与
+  `--since` 一起用时下界取两者更晚的那个，`--until` 仍到当天 23:59:59Z 结束；
+  传 0 或负数时以退出码 2 结束并报 `error: --days must be positive, got 0`，且不
+  调用 Stripe、不创建 `--output-dir`；不传时导出内容与以前完全一致。
 
 ### 变更
 

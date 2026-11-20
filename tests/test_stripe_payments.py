@@ -7763,6 +7763,455 @@ def test_module_export_since_until_rejects_a_bad_date_without_writing(
     assert not output_dir.exists()
 
 
+# --- export --days (Issue #442) ----------------------------------------
+#
+# Issue #442 accepts `export --days N` with the same rolling N*24-hour window
+# and the same validation as `summary --days N` (Issue #271) and
+# `refunds-summary --days N` (Issue #371): all three lists are read with the
+# documented `created[gte]` cutoff, the written rows and the counts line only
+# cover the window, a record exactly on the cutoff is included, and a
+# non-positive `--days` fails before any request or directory.  The fixture
+# below reuses `summary_days_clock` (now pinned to `DAYS_NOW`) and sits
+# inside, exactly on and outside the 30-day cutoff.
+
+
+@pytest.fixture
+def stripe_export_days_lists(stripe_api):
+    """Payments, refunds and customers inside, on and outside the last 30 days."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _days_intent("pi_recent", 123457, "usd", 1),
+            # Exactly 30 days old: the rolling cutoff is inclusive.
+            _days_intent("pi_edge", 1000, "eur", 30),
+            # 31 days old: outside the window.
+            _days_intent("pi_old", 9999, "usd", 31),
+        ),
+        "/v1/refunds": _list_payload(
+            _days_refund("re_recent", 100, "usd", 1),
+            # 31 days old: outside the window.
+            _days_refund("re_old", 200, "usd", 31),
+        ),
+        "/v1/customers": _list_payload(
+            _window_customer(
+                "cus_recent", DAYS_NOW - 24 * 60 * 60, "buyer@example.com"
+            ),
+            _window_customer("cus_old", DAYS_NOW - 31 * 24 * 60 * 60),
+        ),
+    }
+    return stripe_api
+
+
+def test_export_days_sends_the_documented_created_filter(
+    live_key,
+    summary_days_clock,
+    stripe_export_days_lists,
+    export_date,
+    tmp_path,
+    capsys,
+):
+    """Acceptance: all three lists take created[gte]; files keep the window."""
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "export",
+            "--days",
+            "30",
+            "--format",
+            "csv",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    assert [
+        request["path"] for request in stripe_export_days_lists.requests
+    ] == ["/v1/payment_intents", "/v1/refunds", "/v1/customers"]
+    for request in stripe_export_days_lists.requests:
+        assert request["form"]["created[gte]"] == [str(DAYS_30_CUTOFF)]
+        assert "created[lte]" not in request["form"]
+    assert capsys.readouterr().out.splitlines() == [
+        f"exported payments=2 refunds=1 customers=1 to {output_dir}/"
+    ]
+
+    written = {
+        category: list(
+            csv.reader(
+                _export_file(output_dir, category, "csv").open(
+                    newline="", encoding="utf-8"
+                )
+            )
+        )
+        for category in ("payments", "refunds", "customers")
+    }
+    # The 31-day-old records stay out of every file.
+    assert [row[0] for row in written["payments"][1:]] == [
+        "pi_recent",
+        "pi_edge",
+    ]
+    assert [row[0] for row in written["refunds"][1:]] == ["re_recent"]
+    assert [row[0] for row in written["customers"][1:]] == ["cus_recent"]
+
+
+@pytest.mark.parametrize(
+    "arguments, expected_gte",
+    [
+        # The cutoff is after the --since day: the cutoff wins.
+        (["--since", "2026-09-01"], DAYS_30_CUTOFF),
+        # The --since day starts after the cutoff: --since wins.
+        (["--since", "2026-09-30"], _utc(2026, 9, 30, 0, 0, 0)),
+    ],
+)
+def test_export_days_and_since_keep_the_later_lower_edge(
+    live_key,
+    summary_days_clock,
+    stripe_export_days_lists,
+    export_date,
+    tmp_path,
+    arguments,
+    expected_gte,
+):
+    """Acceptance: --since with --days is the intersection, later edge wins."""
+    assert (
+        stripe_payments.main(
+            [
+                "export",
+                "--days",
+                "30",
+                *arguments,
+                "--format",
+                "csv",
+                "--output-dir",
+                str(tmp_path / "export"),
+            ]
+        )
+        == 0
+    )
+
+    assert len(stripe_export_days_lists.requests) == 3
+    for request in stripe_export_days_lists.requests:
+        assert request["form"]["created[gte]"] == [str(expected_gte)]
+
+
+def test_export_days_with_until_keeps_the_last_second_of_its_day(
+    live_key, summary_days_clock, stripe_export_days_lists, export_date, tmp_path
+):
+    """Acceptance: --until still ends at 23:59:59Z of its UTC day."""
+    assert (
+        stripe_payments.main(
+            [
+                "export",
+                "--days",
+                "30",
+                "--until",
+                "2026-10-01",
+                "--format",
+                "csv",
+                "--output-dir",
+                str(tmp_path / "export"),
+            ]
+        )
+        == 0
+    )
+
+    for request in stripe_export_days_lists.requests:
+        form = request["form"]
+        assert form["created[gte]"] == [str(DAYS_30_CUTOFF)]
+        assert form["created[lte]"] == [str(_utc(2026, 10, 1, 23, 59, 59))]
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_export_days_rejects_a_non_positive_window(
+    live_key, stripe_api, tmp_path, value, capsys
+):
+    """Acceptance: bad --days exits 2, calls nothing and creates no directory."""
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "export",
+            "--days",
+            value,
+            "--format",
+            "csv",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert captured.err.startswith("error: ")
+    assert f"--days must be positive, got {value}" in captured.err
+    assert captured.out == ""
+    assert stripe_api.requests == []
+    assert not output_dir.exists()
+
+
+def test_export_days_enforces_the_window_on_the_rows_it_writes(
+    live_key, summary_days_clock, export_date, tmp_path, capsys, monkeypatch
+):
+    """Acceptance: a response outside the window never reaches a file."""
+
+    def record(payload):
+        return SimpleNamespace(**payload)
+
+    records = {
+        stripe.PaymentIntent: [
+            record(_days_intent("pi_old", 800, "usd", 31)),
+            record(_days_intent("pi_recent", 111, "usd", 1)),
+        ],
+        stripe.Refund: [
+            record(_days_refund("re_recent", 25, "usd", 1)),
+            record(_days_refund("re_old", 20, "usd", 31)),
+        ],
+        stripe.Customer: [
+            record(
+                _window_customer(
+                    "cus_recent", DAYS_NOW - 24 * 60 * 60, "buyer@example.com"
+                )
+            ),
+            record(
+                _window_customer("cus_old", DAYS_NOW - 31 * 24 * 60 * 60)
+            ),
+        ],
+    }
+
+    def fake_list_all(resource, *, limit, params=None):
+        # A response that ignores the created filter: every record above comes
+        # back, so only the command's own window check keeps the files inside
+        # the rolling --days window.
+        return iter(records[resource])
+
+    monkeypatch.setattr(stripe_payments, "_list_all", fake_list_all)
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "export",
+            "--days",
+            "30",
+            "--format",
+            "csv",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    assert (
+        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+        in capsys.readouterr().out
+    )
+    written = {
+        category: list(
+            csv.reader(
+                _export_file(output_dir, category, "csv").open(
+                    newline="", encoding="utf-8"
+                )
+            )
+        )
+        for category in ("payments", "refunds", "customers")
+    }
+    assert [row[0] for row in written["payments"][1:]] == ["pi_recent"]
+    assert [row[0] for row in written["refunds"][1:]] == ["re_recent"]
+    assert [row[0] for row in written["customers"][1:]] == ["cus_recent"]
+
+
+def test_export_days_and_summary_days_read_the_same_window(
+    live_key,
+    summary_days_clock,
+    stripe_export_days_lists,
+    export_date,
+    tmp_path,
+    capsys,
+):
+    """Acceptance: one window description serves the summary and the export."""
+    output_dir = tmp_path / "export"
+    assert (
+        stripe_payments.main(
+            [
+                "export",
+                "--days",
+                "30",
+                "--format",
+                "csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    export_requests = list(stripe_export_days_lists.requests)
+    stripe_export_days_lists.requests.clear()
+
+    assert stripe_payments.main(["summary", "--days", "30"]) == 0
+    printed = capsys.readouterr().out.splitlines()
+    # The window totals the one refund inside it.
+    assert "USD 付款 1,234.57 退款 1.00 净额 1,233.57" in printed
+
+    refund_rows = list(
+        csv.reader(
+            _export_file(output_dir, "refunds", "csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
+    )
+    # The export detail carries the same 100 usd cents the summary totals.
+    assert [row[2] for row in refund_rows[1:]] == ["100"]
+    assert {
+        request["form"]["created[gte]"][0] for request in export_requests
+    } == {str(DAYS_30_CUTOFF)}
+    for request in stripe_export_days_lists.requests:
+        assert request["form"]["created[gte]"] == [str(DAYS_30_CUTOFF)]
+
+
+def test_export_without_days_exports_the_whole_account_as_before(
+    live_key,
+    summary_days_clock,
+    stripe_export_days_lists,
+    export_date,
+    tmp_path,
+    capsys,
+):
+    """Acceptance: omitting --days keeps the previous request and output."""
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            [
+                "export",
+                "--format",
+                "csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    assert capsys.readouterr().out.splitlines() == [
+        f"exported payments=3 refunds=2 customers=2 to {output_dir}/"
+    ]
+    for request in stripe_export_days_lists.requests:
+        assert "created[gte]" not in request["form"]
+        assert "created[lte]" not in request["form"]
+
+
+def test_export_help_lists_the_days_option(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        stripe_payments.main(["export", "--help"])
+
+    assert excinfo.value.code == 0
+    assert "--days" in capsys.readouterr().out
+
+
+def test_module_export_days_writes_only_the_window_records(
+    local_stripe_server, tmp_path
+):
+    """The real user entry point: `python -m stripe_payments export --days 30`."""
+    recorder, server = local_stripe_server
+    now_before = stripe_payments._now_timestamp()
+    recorder.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _window_intent("pi_recent", 111, now_before - 24 * 60 * 60),
+            _window_intent("pi_old", 900, now_before - 40 * 24 * 60 * 60),
+        ),
+        "/v1/refunds": _list_payload(
+            _window_refund(
+                "re_recent", 25, now_before - 24 * 60 * 60, "pi_recent"
+            ),
+            _window_refund(
+                "re_old", 30, now_before - 40 * 24 * 60 * 60, "pi_old"
+            ),
+        ),
+        "/v1/customers": _list_payload(
+            _window_customer(
+                "cus_recent", now_before - 24 * 60 * 60, "buyer@example.com"
+            ),
+            _window_customer("cus_old", now_before - 40 * 24 * 60 * 60),
+        ),
+    }
+    output_dir = tmp_path / "export"
+
+    result = _run_module_command(
+        server,
+        [
+            "export",
+            "--days",
+            "30",
+            "--format",
+            "csv",
+            "--output-dir",
+            str(output_dir),
+        ],
+        tmp_path,
+    )
+    now_after = stripe_payments._now_timestamp()
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout.splitlines() == [
+        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+    ]
+    assert [request["path"] for request in recorder.requests] == [
+        "/v1/payment_intents",
+        "/v1/refunds",
+        "/v1/customers",
+    ]
+    window = 30 * 24 * 60 * 60
+    for request in recorder.requests:
+        # The cutoff is the subprocess's own "now" minus 30*24 hours.
+        cutoff = int(request["form"]["created[gte]"][0])
+        assert now_before - window <= cutoff <= now_after - window
+        assert "created[lte]" not in request["form"]
+
+    payments = list(
+        csv.reader(
+            _dated_export_file(output_dir, "payments", "csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
+    )
+    assert [row[0] for row in payments[1:]] == ["pi_recent"]
+
+
+def test_module_export_days_rejects_a_non_positive_window_without_writing(
+    tmp_path,
+):
+    """The real entry point fails on --days 0 before any request or file."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != stripe_payments.LIVE_SECRET_KEY_ENV
+    }
+    output_dir = tmp_path / "export"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "stripe_payments",
+            "export",
+            "--days",
+            "0",
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+
+    assert result.returncode == 2
+    assert "error: --days must be positive, got 0" in result.stderr
+    assert result.stdout == ""
+    assert not output_dir.exists()
+
+
 # --- summary counts only succeeded records (Issue #318) ------------------
 
 # The acceptance account of Issue #318: one succeeded usd payment and one

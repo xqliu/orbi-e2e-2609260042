@@ -615,6 +615,57 @@ def test_readme_documents_the_export_format_choices():
         )
 
 
+# Issue #442: `export --days 30` exports only the records created in the
+# rolling 30*24-hour window, with the same window and validation as
+# `summary --days 30` and `refunds-summary --days 30`.  The export section
+# shows the command, the counts line of the window, the shared `created[gte]`
+# filter, the later `--since` edge and the failure path, and the changelog
+# records the new option.
+EXPORT_DAYS_SAMPLE_LINE = (
+    "exported payments=2 refunds=1 customers=1 to "
+    f"{stripe_payments.DEFAULT_OUTPUT_DIR}/"
+)
+
+
+def test_readme_documents_the_export_days_option():
+    """Issue #442: the export section shows `--days N` and its window."""
+    body = _readme_subsection(README_EXPORT_HEADING)
+    assert "--days" in _subparser_option_strings("export"), (
+        "the export subparser must define --days"
+    )
+    command = f"{STRIPE_EXPORT_COMMAND} --days 30 --format csv"
+    assert command in body, (
+        f"the {README_EXPORT_HEADING!r} section must show {command!r}"
+    )
+    assert EXPORT_DAYS_SAMPLE_LINE in body, (
+        f"the {README_EXPORT_HEADING!r} section must show the exported counts "
+        f"line of the --days window {EXPORT_DAYS_SAMPLE_LINE!r}"
+    )
+    unwrapped = body.replace("\n", "")
+    # The window is pushed down as the list filter, so the reader knows only
+    # that stretch of time is read.
+    assert "created[gte]" in unwrapped, (
+        f"the {README_EXPORT_HEADING!r} section must name the created[gte] "
+        "list filter of the --days window"
+    )
+    # --since and --days intersect on the later lower edge, like summary.
+    assert "`--days` 与 `--since` 一起用时下界取两者更晚的那个" in unwrapped, (
+        f"the {README_EXPORT_HEADING!r} section must say --since with --days "
+        "keeps the later lower edge"
+    )
+    # The failure path and its repair are documented next to the example.
+    assert "error: --days must be positive, got 0" in unwrapped, (
+        f"the {README_EXPORT_HEADING!r} section must show the --days 0 "
+        "failure message"
+    )
+    unreleased = _read(CHANGELOG).split("## [Unreleased]", 1)[1].split(
+        "\n## ", 1
+    )[0].replace("\n", "")
+    assert "`export` 子命令新增 `--days N`" in unreleased, (
+        "CHANGELOG.md must record export --days under [Unreleased]"
+    )
+
+
 # Issue #230: the exported file names carry the UTC export date.
 EXPORT_SAMPLE_FILE_NAME = "payments-2026-10-28.csv"
 

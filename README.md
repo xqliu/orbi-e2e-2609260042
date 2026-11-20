@@ -239,6 +239,31 @@ exported payments=1 refunds=1 customers=2 to export/
 `error: no Stripe customer has the email ...`，这时改用 `--customer cus_...`
 指定客户、把窗口只套在付款和退款上即可。
 
+只想看最近 N×24 小时内创建的记录（例如和 `summary --days 30` 同一个窗口）时加
+`--days N`：
+
+```sh
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --days 30 --format csv
+```
+
+窗口从运行时刻往前推 N×24 小时，只有 `created` 落在窗口内的付款、退款和客户记录
+会被导出，恰好落在截止时刻（`created` 等于运行时刻减 N×24 小时）的记录仍算在
+窗口内。窗口通过 Stripe 列表的 `created[gte]` 过滤参数下推到 PaymentIntents、
+Refunds、Customers 三个列表，所以 `payments-<日期>.csv`、`refunds-<日期>.csv`、
+`customers-<日期>.csv` 里不会出现窗口外的行，命令最后一行的
+`exported payments=... refunds=... customers=...` 也只数窗口内的记录；行格式、
+文件名和列名与不加 `--days` 时完全一致。例如最近 30 天有两笔付款、一笔退款和
+一个客户，31 天前还有一笔付款和一个客户时，输出是：
+
+```
+exported payments=2 refunds=1 customers=1 to export/
+```
+
+`--days` 与 `--since` 一起用时下界取两者更晚的那个（与 `summary`、
+`refunds-summary` 相同），`--until` 仍到当天 23:59:59Z 结束；和 `--customer`、
+`--email`、`--format`、`--limit`、`--output-dir` 一起用时它们都只看到窗口内的
+记录。不传 `--days` 时导出内容、文件名和末行输出与以前完全一致（整个账户）。
+
 失败与修复：`--format` 只接受 `csv`、`json`、`both`，填别的值时命令以退出码 2
 结束并报 `argument --format: invalid choice: 'xml' (choose from 'csv', 'json',
 'both')`，此时不会调用 Stripe、也不会创建目录；按提示改成这三档之一再运行。
@@ -251,8 +276,11 @@ Stripe 里的不一致）时命令以退出码 2 结束并报
 此时只查了一次 Customers 列表、没有写任何文件；按 Stripe Dashboard 里的拼写
 重跑即可。`--email` 和 `--customer` 同时给出时报
 `error: --email and --customer cannot be combined: pass the customer's email or its cus_... id, not both`，
-去掉其中一个再运行。`--since` / `--until` 传的不是 `YYYY-MM-DD` 日期时以退出码
-2 结束并报 `error: --since must be a YYYY-MM-DD date, got '2026-13-01'`；
+去掉其中一个再运行。`--days` 传 0 或负数时以退出码 2 结束并报
+`error: --days must be positive, got 0`，在发出任何 Stripe 请求、创建
+`--output-dir` 之前就失败，改成正整数（如 `--days 30`）后重跑。
+`--since` / `--until` 传的不是 `YYYY-MM-DD` 日期时以退出码 2 结束并报
+`error: --since must be a YYYY-MM-DD date, got '2026-13-01'`；
 `--since` 晚于 `--until` 时报
 `error: --until 2026-09-01 must not be before --since 2026-09-30`。这两种情况都
 不会调用 Stripe、也不会创建 `--output-dir`，改成合法日期或正确顺序后重跑。缺少
