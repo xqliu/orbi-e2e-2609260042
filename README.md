@@ -66,7 +66,7 @@ CI 会在每个 PR 上运行这些检查。
 ## Run the tests locally
 
 本地运行测试的命令就是下面这一条，在仓库根目录执行（需要 Python 3，并先安装
-测试依赖 `python3 -m pip install pytest stripe`）：
+测试依赖 `python -m pip install pytest stripe`）：
 
 ```sh
 python -m pytest

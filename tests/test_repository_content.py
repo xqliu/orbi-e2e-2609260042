@@ -158,7 +158,7 @@ ISSUE_TEMPLATE_SECTIONS = (
 README_TESTS_HEADING = "## Run the tests locally"
 README_TESTS_COMMAND = "python3 -m unittest discover -s tests -v"
 # Issue #426: the 「Run the tests locally」 section leads with the command the
-# reader can actually run, `python -m pytest`; the `unittest` command above
+# reader can actually run, `python -m pytest`; the `unittest` command below
 # stays in the section only as the one that does not run the tests.
 README_LOCAL_TEST_COMMAND = "python -m pytest"
 
