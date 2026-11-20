@@ -21,6 +21,19 @@ python -m pytest -q
 
 测试全部通过时，最后一行会是形如 `181 passed in 63.93s` 的汇总，且没有 `failed`。
 
+## Usage
+
+在仓库根目录执行下面这一条命令即可运行本仓库的主脚本 `stripe_payments.py`（第一次运行前先装依赖
+`stripe`，见下文[运行测试](#运行测试)一节）；`--version` 只打印版本号，不读取 Stripe 密钥、
+也不访问 Stripe API：
+
+```sh
+python -m stripe_payments --version
+```
+
+没装依赖时同一条命令会报 `ModuleNotFoundError: No module named 'stripe'`，
+执行 `python -m pip install stripe` 后即可重跑。
+
 ## 请勿提交 PR
 
 本仓库是 Orbi beta 的端到端（e2e）测试仓库，只服务于 Orbi 自身的自动化回归验证。
