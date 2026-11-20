@@ -1628,3 +1628,29 @@ def test_contributing_presents_the_pull_request_rules_as_a_numbered_list():
         assert rule not in standalone, (
             f"the rule {rule!r} must not stay a standalone paragraph"
         )
+
+# Issue #411: the changelog opens with an empty "未发布" section that the next
+# delivery can fill in, above the Keep a Changelog `[Unreleased]` section.
+CHANGELOG_UNRELEASED_HEADING = "## 未发布"
+CHANGELOG_UNRELEASED_PLACEHOLDER = "暂无"
+
+
+def test_changelog_starts_with_an_empty_unreleased_section():
+    """Issue #411: the first `## ` section is `## 未发布` holding `暂无`."""
+    text = _read(CHANGELOG)
+    sections = text.split("\n## ")
+    assert len(sections) > 1, "CHANGELOG.md must have at least one `## ` section"
+    first = sections[1]
+    assert first.splitlines()[0] == CHANGELOG_UNRELEASED_HEADING[3:], (
+        "CHANGELOG.md must start with a '## 未发布' section, got "
+        f"{first.splitlines()[0]!r}"
+    )
+    body = first.split("\n## ", 1)[0]
+    assert body.split("\n", 1)[1].strip() == CHANGELOG_UNRELEASED_PLACEHOLDER, (
+        "the '## 未发布' section must hold exactly one line "
+        f"{CHANGELOG_UNRELEASED_PLACEHOLDER!r}"
+    )
+    # The existing Keep a Changelog section keeps every recorded entry.
+    assert "\n## [Unreleased]\n" in text, (
+        "CHANGELOG.md must keep its existing '## [Unreleased]' section"
+    )
