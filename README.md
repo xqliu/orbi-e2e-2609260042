@@ -121,6 +121,19 @@ If `pytest` or `stripe` is not installed, `python -m pytest` fails with
 
 <https://github.com/xqliu/orbi-e2e-2609260042/issues>
 
+## Refund summary
+
+退款汇总按「退款创建周（UTC，ISO 8601 周）+ 币种」统计，本节跟随 commit
+`809bb78399a49e062e7564c024e83c70a6b75834` 的退款汇总行为（该行为在当前 `main`
+上未变）：`refunds-summary` 只统计 Stripe 状态为 `succeeded` 的退款，每周每个币种
+一行打印退款笔数和金额（先按周、再按币种代码排序），最后一行是这些周行的合计
+（跨币种也合成一行；没有任何周行时不打印合计行）；`pending`、`failed`、
+`canceled` 等其他状态的退款不进任何一行，也不进
+`refunds-summary-<日期>.csv`。`--currency` 只保留一个币种的周行、也不再打印合计
+行，`--since` / `--until` / `--days` 按 UTC 时间窗筛选，`--csv` 把同样的行写进 CSV。
+用法、输出样例与失败修复见下文
+[按周汇总退款（refunds-summary）](#按周汇总退款refunds-summary)。
+
 ## Stripe 付款（live 验证）
 
 本仓库带一个最小的 Stripe 付款入口，只使用 live 密钥；密钥从不入库、也不进命令
