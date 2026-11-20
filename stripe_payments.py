@@ -38,6 +38,11 @@ that talks to the Stripe API with the operator's live secret key.
   inside that inclusive UTC date window, via Stripe's ``created[gte]`` /
   ``created[lte]`` list filters on all three lists (Issue #312); either date
   works alone, and a malformed or reversed date fails before any request.
+  ``--days 30`` exports only the records created in the rolling last
+  N*24 hours instead, the same window and the same
+  ``error: --days must be positive`` validation ``summary --days N`` uses
+  (Issue #442); with ``--since`` the lower edge is the later of the two
+  starts, and ``--until`` still ends at the last second of its UTC day.
 * ``python -m stripe_payments summary`` prints the payments total, the refunds
   total and the net income per currency, one currency per line, so a daily
   check does not need the exported CSV files.  The first line names the UTC
@@ -380,6 +385,7 @@ def export_data(
     limit: int,
     customer: str | None = None,
     email: str | None = None,
+    days: int | None = None,
     since: int | None = None,
     until: int | None = None,
 ) -> tuple[int, int, int]:
@@ -408,13 +414,24 @@ def export_data(
     are read and written.  Omitted, the side is unfiltered and the whole
     account is exported as before.
 
+    ``days`` narrows the same window to the rolling ``days``*24 hours ending
+    now (Issue #442), the window ``summary --days``/``refunds-summary --days``
+    use: all three lists take the documented ``created[gte]`` cutoff, a
+    record exactly on the cutoff is included, and with ``since`` too the
+    lower edge is the later of the two starts.  The cutoff is resolved once,
+    so the pushed-down request and the per-record guard never disagree
+    (Issue #390).
+
     Every page of all three lists is fetched before any file is written, so a
     failing Stripe call (anywhere in the pagination) leaves no half-written
     export behind.  The files are named after the export date (Issue #230),
     e.g. ``payments-2026-10-28.csv``, so exports from different days coexist.
     """
     stripe.api_key = live_secret_key()
-    created_filters = _created_filter(None, since, until)
+    # Issue #442: the rolling ``--days`` cutoff is resolved once, the value
+    # both the ``created[gte]`` request and the per-record guard use.
+    cutoff = _created_cutoff(days, since)
+    created_filters = _created_filter(None, cutoff, until)
     narrowed = customer is not None or email is not None
     if email is not None:
         customers = list(
@@ -460,7 +477,7 @@ def export_data(
     payments = [
         payment
         for payment in payments
-        if _created_in_window(payment.created, since, until)
+        if _created_in_window(payment.created, cutoff, until)
     ]
     payment_intent_ids = {payment.id for payment in payments}
     refunds = [
@@ -469,7 +486,7 @@ def export_data(
             stripe.Refund, limit=limit, params=created_filters
         )
         if (not narrowed or refund.payment_intent in payment_intent_ids)
-        and _created_in_window(refund.created, since, until)
+        and _created_in_window(refund.created, cutoff, until)
     ]
     if customers is None:
         customers = list(
@@ -478,7 +495,7 @@ def export_data(
     customers = [
         customer_record
         for customer_record in customers
-        if _created_in_window(customer_record.created, since, until)
+        if _created_in_window(customer_record.created, cutoff, until)
     ]
     # Issue #239: the payments CSV shows who paid.  The Customers list is
     # already read for the customers export, so the email column reuses it:
@@ -1560,6 +1577,16 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     export.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "only export the records created in the last N days "
+            "(e.g. --days 30); omitted, the whole account is exported"
+        ),
+    )
+    export.add_argument(
         "--since",
         default=None,
         metavar=SUMMARY_DATE_FORMAT,
@@ -1835,6 +1862,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "--email and --customer cannot be combined: pass the "
                 "customer's email or its cus_... id, not both"
             )
+        # Issue #442: the same positive `--days` window as `summary`
+        # (Issue #271), rejected before any list request and before the
+        # --output-dir is created.
+        if args.days is not None and args.days < 1:
+            raise ConfigurationError(
+                f"--days must be positive, got {args.days}"
+            )
         # Issue #312: a malformed or reversed date fails before any list
         # request and before the --output-dir is created.  Like the summary
         # (Issue #303), Stripe's inclusive ``created[lte]`` edge is the last
@@ -1848,6 +1882,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             limit=args.limit,
             customer=args.customer or None,
             email=args.email or None,
+            days=args.days,
             since=since,
             until=until,
         )
