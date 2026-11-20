@@ -157,6 +157,10 @@ ISSUE_TEMPLATE_SECTIONS = (
 # Issue #202 documents how to run every test locally in the README.
 README_TESTS_HEADING = "## Run the tests locally"
 README_TESTS_COMMAND = "python3 -m unittest discover -s tests -v"
+# Issue #426: the 「Run the tests locally」 section leads with the command the
+# reader can actually run, `python -m pytest`; the `unittest` command below
+# stays in the section only as the one that does not run the tests.
+README_LOCAL_TEST_COMMAND = "python -m pytest"
 
 # Issue #207 adds a Chinese 「运行测试」 section that runs every test with the
 # same command as the CI `Run tests` step.
@@ -308,6 +312,40 @@ def test_readme_documents_running_the_tests_locally():
     )
     assert README_TESTS_COMMAND in text, (
         f"the {README_TESTS_HEADING!r} section must show {README_TESTS_COMMAND!r}"
+    )
+
+
+def test_readme_run_the_tests_locally_section_names_the_pytest_command():
+    """Issue #426: the local test command is `python -m pytest`."""
+    body = _readme_section(README_TESTS_HEADING)
+    # The first command a reader meets in this section is the one that really
+    # runs the tests, on its own line.
+    assert "```sh\n" in body, (
+        f"the {README_TESTS_HEADING!r} section must show a shell command block"
+    )
+    first_command = body.split("```sh\n", 1)[1].split("\n```", 1)[0]
+    assert first_command.strip() == README_LOCAL_TEST_COMMAND, (
+        f"the first command of the {README_TESTS_HEADING!r} section must be "
+        f"{README_LOCAL_TEST_COMMAND!r}, got {first_command.strip()!r}"
+    )
+    assert README_LOCAL_TEST_COMMAND in body.splitlines(), (
+        f"the {README_TESTS_HEADING!r} section must spell "
+        f"{README_LOCAL_TEST_COMMAND!r} out on its own line"
+    )
+    # The documented command is the CI entry point, so the section cannot
+    # drift away from the tests CI really runs.
+    assert README_LOCAL_TEST_COMMAND in _read(WORKFLOW), (
+        f"the CI Run tests step must use {README_LOCAL_TEST_COMMAND!r}"
+    )
+    # The `unittest` command stays documented as the one that does not run the
+    # tests, so a reader who meets it elsewhere knows why it reports nothing.
+    assert README_TESTS_COMMAND in body, (
+        f"the {README_TESTS_HEADING!r} section must still name "
+        f"{README_TESTS_COMMAND!r} as the command that does not run the tests"
+    )
+    assert "NO TESTS RAN" in body, (
+        f"the {README_TESTS_HEADING!r} section must say the {README_TESTS_COMMAND!r} "
+        "command does not run the tests"
     )
 
 
