@@ -175,6 +175,10 @@ README_RUN_TESTS_LINE = (
     "（与 CI 的 `Run tests` 步骤同一个命令，详见 [运行测试](#运行测试)）。"
 )
 
+# Issue #427: the paragraph directly below the README title says what this
+# repository is, so a visitor knows it on the first screen.
+README_FIRST_PARAGRAPH = "本仓库是 Orbi beta 的端到端测试仓库。"
+
 # Issue #284 opens the README with a 「快速开始」 section so a first-time visitor
 # sees the test command, where to run it and the line a passing run prints.
 README_QUICK_START_HEADING = "## 快速开始"
@@ -280,6 +284,20 @@ def test_gitignore_ignores_the_default_export_directory():
 
 def test_readme_is_not_empty():
     assert _read(README).strip(), "README.md is empty"
+
+
+def test_readme_first_paragraph_states_this_is_the_beta_e2e_repository():
+    """Issue #427: the paragraph below the title says what this repo is."""
+    paragraphs = [
+        block.strip() for block in _read(README).split("\n\n") if block.strip()
+    ]
+    assert paragraphs, "README.md has no paragraph"
+    # The first block is the `# ` title; the paragraph below it is the intro.
+    intro = paragraphs[1] if paragraphs[0].startswith("# ") else paragraphs[0]
+    assert intro == README_FIRST_PARAGRAPH, (
+        f"the README's first paragraph must be {README_FIRST_PARAGRAPH!r}, "
+        f"got {intro!r}"
+    )
 
 
 def test_readme_documents_running_the_tests_locally():
