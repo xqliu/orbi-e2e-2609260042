@@ -8458,3 +8458,315 @@ def test_summary_csv_keeps_the_range_line_out_of_the_file(
         ["USD", "1,234.57", "1.00", "1,233.57"],
     ]
     assert all(SUMMARY_RANGE_SAMPLE_LINE not in row for row in printed[1:])
+
+# --- the day window on the summary totals (Issue #390) ------------------
+#
+# Issue #390 gives `summary` and `refunds-summary` the guard `export` has had
+# since Issue #314: both lists still take the pushed-down `created[gte]` /
+# `created[lte]` filters, but the records actually totalled are checked again,
+# so a list response carrying a record outside the named UTC days (or an API
+# that ignores the filter) can never reach a currency row, `合计`, `总笔数`,
+# `平均金额`, either extreme, the `统计范围` line, a refund week row or a CSV
+# file.  `_list_all` is replaced below so the response ignores the filter, the
+# only way the difference is visible: the local recorder applies it.
+
+WINDOW_GUARD_SINCE = "2026-09-01"
+WINDOW_GUARD_UNTIL = "2026-09-30"
+
+
+def _as_record(payload):
+    """A Stripe record as the SDK returns it: attribute access."""
+    return SimpleNamespace(**payload)
+
+
+def _ignore_the_created_filter(monkeypatch, records):
+    """Serve every record of ``records`` for each list call, filter or not."""
+
+    def fake_list_all(resource, *, limit, params=None):
+        return iter(records[resource])
+
+    monkeypatch.setattr(stripe_payments, "_list_all", fake_list_all)
+
+
+def test_summary_enforces_the_day_window_on_the_totals(
+    live_key, monkeypatch, export_date, tmp_path, capsys
+):
+    """Acceptance: a filter-ignoring list still totals the window only."""
+    records = {
+        stripe.PaymentIntent: [
+            # The last second before the window and the first second after
+            # it: neither may enter a total, count, extreme or file.
+            _as_record(
+                _by_month_intent(
+                    "pi_before", 999999, "usd", _utc(2026, 8, 31, 23, 59, 59)
+                )
+            ),
+            _as_record(
+                _by_month_intent(
+                    "pi_after", 888888, "usd", _utc(2026, 10, 1, 0, 0, 0)
+                )
+            ),
+            # Both edges are whole days, so the window holds these three.
+            _as_record(
+                _by_month_intent(
+                    "pi_start", 250, "gbp", _utc(2026, 9, 1, 0, 0, 0)
+                )
+            ),
+            _as_record(
+                _by_month_intent(
+                    "pi_inside", 123457, "usd", _utc(2026, 9, 10, 12)
+                )
+            ),
+            _as_record(
+                _by_month_intent(
+                    "pi_end", 1000, "eur", _utc(2026, 9, 30, 23, 59, 59)
+                )
+            ),
+        ],
+        stripe.Refund: [
+            _as_record(
+                _by_month_refund(
+                    "re_before", 7777, "usd", _utc(2026, 8, 31, 23, 59, 59)
+                )
+            ),
+            _as_record(
+                _by_month_refund(
+                    "re_after", 5555, "eur", _utc(2026, 10, 1, 0, 0, 0)
+                )
+            ),
+            _as_record(
+                _by_month_refund(
+                    "re_inside", 100, "usd", _utc(2026, 9, 20, 12),
+                    payment_intent="pi_inside",
+                )
+            ),
+            _as_record(
+                _by_month_refund(
+                    "re_end", 25, "eur", _utc(2026, 9, 30, 23, 59, 59),
+                    payment_intent="pi_end",
+                )
+            ),
+        ],
+    }
+    _ignore_the_created_filter(monkeypatch, records)
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "summary",
+            "--since",
+            WINDOW_GUARD_SINCE,
+            "--until",
+            WINDOW_GUARD_UNTIL,
+            "--csv",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    # The same numbers the honoring filter prints (Issue #303 fixtures).
+    assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2026-09-01..2026-09-30",
+        *WINDOW_SAMPLE_LINES,
+        WINDOW_TOTAL_LINE,
+        WINDOW_COUNT_LINE,
+        WINDOW_AVERAGE_LINE,
+        WINDOW_LARGEST_LINE,
+        WINDOW_SMALLEST_LINE,
+        f"exported summary rows=3 to {_summary_csv_file(output_dir)}",
+    ]
+    assert _summary_csv_rows(output_dir) == [
+        SUMMARY_CSV_HEADER,
+        ["EUR", "10.00", "0.25", "9.75"],
+        ["GBP", "2.50", "0.00", "2.50"],
+        ["USD", "1,234.57", "1.00", "1,233.57"],
+    ]
+
+
+def test_refunds_summary_enforces_the_day_window_on_the_week_rows(
+    live_key, monkeypatch, export_date, tmp_path, capsys
+):
+    """Acceptance: the week rows, 合计 and CSV hold window refunds only."""
+    records = {
+        stripe.Refund: [
+            # The last second before the window and the first second after
+            # it: neither may enter a week row, 合计 or CSV row.
+            _as_record(
+                _refund_on(
+                    "re_before", 50, "usd", _utc(2026, 8, 31, 23, 59, 59)
+                )
+            ),
+            _as_record(
+                _refund_on("re_after", 250, "usd", _utc(2026, 10, 1, 0, 0, 0))
+            ),
+            # Both edges are whole days, so these three are inside.
+            _as_record(
+                _refund_on("re_start", 25, "eur", _utc(2026, 9, 1, 0, 0, 0))
+            ),
+            _as_record(
+                _refund_on("re_inside", 100, "usd", _utc(2026, 9, 10, 12))
+            ),
+            _as_record(
+                _refund_on(
+                    "re_end", 100, "eur", _utc(2026, 9, 30, 23, 59, 59)
+                )
+            ),
+        ]
+    }
+    _ignore_the_created_filter(monkeypatch, records)
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "refunds-summary",
+            "--since",
+            WINDOW_GUARD_SINCE,
+            "--until",
+            WINDOW_GUARD_UNTIL,
+            "--csv",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    printed = capsys.readouterr().out.splitlines()
+    # The same week rows the honoring filter prints (Issue #313 fixtures).
+    assert printed[:-1] == [
+        *REFUNDS_WINDOW_SAMPLE_LINES,
+        REFUNDS_WINDOW_SAMPLE_TOTAL_LINE,
+    ]
+    csv_file = _dated_export_file(output_dir, "refunds-summary", "csv")
+    assert printed[-1] == f"exported refunds-summary rows=3 to {csv_file}"
+    with csv_file.open(newline="", encoding="utf-8") as handle:
+        assert list(csv.reader(handle)) == [
+            REFUNDS_SUMMARY_CSV_HEADER,
+            ["2026-W36", "eur", "1", "0.25"],
+            ["2026-W37", "usd", "1", "1.00"],
+            ["2026-W40", "eur", "1", "1.00"],
+        ]
+
+
+def test_summary_days_guards_with_the_same_captured_now(
+    live_key, monkeypatch, capsys
+):
+    """Acceptance: the guard reuses the cutoff the request pushed down."""
+    # A second clock read would move the cutoff an hour later and drop the
+    # payment exactly on the pushed-down edge below.
+    stamps = iter([DAYS_NOW, DAYS_NOW + 60 * 60])
+    monkeypatch.setattr(
+        stripe_payments, "_now_timestamp", lambda: next(stamps)
+    )
+    records = {
+        stripe.PaymentIntent: [
+            # Exactly on the cutoff (inclusive) and one second before it.
+            _as_record(
+                _by_month_intent("pi_edge", 1000, "usd", DAYS_30_CUTOFF)
+            ),
+            _as_record(
+                _by_month_intent(
+                    "pi_before", 9999, "usd", DAYS_30_CUTOFF - 1
+                )
+            ),
+        ],
+        stripe.Refund: [],
+    }
+    filters = []
+
+    def fake_list_all(resource, *, limit, params=None):
+        filters.append(params)
+        return iter(records[resource])
+
+    monkeypatch.setattr(stripe_payments, "_list_all", fake_list_all)
+
+    assert stripe_payments.main(["summary", "--days", "30"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2026-09-28..2026-09-28",
+        "USD 付款 10.00 退款 0.00 净额 10.00",
+        "合计 付款 10.00 退款 0.00 净额 10.00",
+        "总笔数 1",
+        "平均金额 10.00",
+        "最大单笔金额 10.00",
+        "最小单笔金额 10.00",
+    ]
+    # The request and the guard use the one captured "now".
+    assert filters == [{"created": {"gte": DAYS_30_CUTOFF}}] * 2
+
+
+def test_refunds_summary_days_guards_with_the_same_captured_now(
+    live_key, monkeypatch, capsys
+):
+    """Acceptance: refunds-summary reuses the pushed-down --days cutoff too."""
+    stamps = iter([DAYS_NOW, DAYS_NOW + 60 * 60])
+    monkeypatch.setattr(
+        stripe_payments, "_now_timestamp", lambda: next(stamps)
+    )
+    records = {
+        stripe.Refund: [
+            _as_record(_refund_on("re_edge", 100, "usd", DAYS_30_CUTOFF)),
+            _as_record(
+                _refund_on("re_before", 9999, "usd", DAYS_30_CUTOFF - 1)
+            ),
+        ]
+    }
+    filters = []
+
+    def fake_list_all(resource, *, limit, params=None):
+        filters.append(params)
+        return iter(records[resource])
+
+    monkeypatch.setattr(stripe_payments, "_list_all", fake_list_all)
+
+    assert stripe_payments.main(["refunds-summary", "--days", "30"]) == 0
+
+    assert capsys.readouterr().out.splitlines() == [
+        "2026-W40 usd 退款 1 笔 1.00",
+        "合计 退款 1 笔 1.00",
+    ]
+    assert filters == [{"created": {"gte": DAYS_30_CUTOFF}}]
+
+
+def test_summary_and_refunds_summary_drop_nothing_without_a_window(
+    live_key, monkeypatch, capsys
+):
+    """Acceptance: no date option totals the whole account, as before."""
+    records = {
+        stripe.PaymentIntent: [
+            # Far outside any window: no window means no record is dropped.
+            _as_record(
+                _by_month_intent(
+                    "pi_old", 1000, "usd", _utc(2020, 1, 1, 0, 0, 0)
+                )
+            ),
+            _as_record(
+                _by_month_intent(
+                    "pi_new", 2500, "usd", _utc(2030, 12, 31, 23, 59, 59)
+                )
+            ),
+        ],
+        stripe.Refund: [
+            _as_record(_refund_on("re_old", 100, "usd", _utc(2019, 1, 1))),
+            _as_record(
+                _refund_on("re_new", 200, "usd", _utc(2031, 12, 31))
+            ),
+        ],
+    }
+    _ignore_the_created_filter(monkeypatch, records)
+
+    assert stripe_payments.main(["summary"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "统计范围 2019-01-01..2031-12-31",
+        "USD 付款 35.00 退款 3.00 净额 32.00",
+        "合计 付款 35.00 退款 3.00 净额 32.00",
+        "总笔数 4",
+        "平均金额 8.00",
+        "最大单笔金额 25.00",
+        "最小单笔金额 1.00",
+    ]
+
+    refund_totals = stripe_payments.summarize_refunds_by_week()
+    assert sum(count for count, _ in refund_totals.values()) == 2
+    assert sum(amount for _, amount in refund_totals.values()) == 300
+

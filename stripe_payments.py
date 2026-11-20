@@ -593,6 +593,25 @@ def _created_in_window(
     )
 
 
+def _created_cutoff(days: int | None, since: int | None) -> int | None:
+    """The inclusive lower ``created`` edge the window names, ``None`` if none.
+
+    The lower edge is ``--since``'s first second when only that is given, the
+    rolling ``--days`` cutoff (``now - days*24h``) when only that is given,
+    and the later of the two starts when both are given, the intersection the
+    documented ``created[gte]`` filter pushes down (Issue #371).
+
+    Issue #390: the rolling cutoff is measured from the clock, so a caller
+    that also guards the records it totals resolves it once here and hands the
+    same value to ``_created_filter()`` and ``_created_in_window()``; the
+    pushed-down request and the guard can then never disagree.
+    """
+    if days is None:
+        return since
+    days_gte = _now_timestamp() - days * SECONDS_PER_DAY
+    return days_gte if since is None else max(since, days_gte)
+
+
 def _created_filter(
     days: int | None,
     since: int | None = None,
@@ -609,11 +628,12 @@ def _created_filter(
     the window is the intersection of both, so the lower edge is the later
     start.  ``None`` for every argument means "no filter": the whole-account
     request is sent unchanged.
+
+    With ``days`` the lower edge is ``_created_cutoff()``'s rolling cutoff,
+    the value the summary commands also guard the totalled records with
+    (Issue #390).
     """
-    gte = since
-    if days is not None:
-        days_gte = _now_timestamp() - days * SECONDS_PER_DAY
-        gte = days_gte if gte is None else max(gte, days_gte)
+    gte = _created_cutoff(days, since)
     created = {
         key: value
         for key, value in (("gte", gte), ("lte", until))
@@ -686,6 +706,12 @@ def summarize_data(
     that UTC day window are totalled; omitted, the side is unfiltered and the
     whole account is totalled as before.
 
+    Every record is checked again after the lists are read (Issue #390), with
+    the same lower edge the ``--days`` cutoff pushed down: a payment or refund
+    whose ``created`` lies outside the window is dropped before it reaches a
+    currency row, a total, the count, an extreme, the range line or a CSV row,
+    so a list response that carries one can never widen the numbers.
+
     ``first_created`` and ``last_created`` are the ``created`` timestamps of
     the earliest and the latest record those totals cover (Issue #321), or
     ``None`` twice when no totalled record was read, so the summary can print
@@ -695,7 +721,11 @@ def summarize_data(
     cover every matching record, not only the first page.
     """
     stripe.api_key = live_secret_key()
-    filters = _created_filter(days, since, until)
+    # Issue #390: one resolved lower edge for both the pushed-down
+    # ``created[gte]`` request and the guard on the records it totals, so a
+    # ``--days`` run can never read and total two different windows.
+    cutoff = _created_cutoff(days, since)
+    filters = _created_filter(None, cutoff, until)
     totals: dict[object, list[int]] = {}
     # Issue #285: the refunds carry no customer, so ``{payment id: customer}``
     # maps a refund's ``payment_intent`` to the customer of that payment.  Only
@@ -710,6 +740,14 @@ def summarize_data(
     for payment in _list_all(
         stripe.PaymentIntent, limit=DEFAULT_LIMIT, params=filters
     ):
+        # Issue #390: the day window is enforced again on the records actually
+        # totalled, so a list response that carries a record outside the named
+        # UTC days (or an API that ignores the filters) can never enter a
+        # currency row, a total, the count, an extreme, the range line or a
+        # CSV row.  The ``created[gte]``/``created[lte]`` filters above still
+        # keep the read small; the printed numbers are the contract.
+        if not _created_in_window(payment.created, cutoff, until):
+            continue
         # Issue #318: only money Stripe actually took counts, so a payment
         # that is not succeeded (requires_payment_method, requires_capture,
         # processing, canceled, ...) is dropped before it reaches any total,
@@ -740,6 +778,10 @@ def summarize_data(
     for refund in _list_all(
         stripe.Refund, limit=DEFAULT_LIMIT, params=filters
     ):
+        # Issue #390: a refund outside the day window takes part in no total,
+        # count, extreme or CSV row either.
+        if not _created_in_window(refund.created, cutoff, until):
+            continue
         # Issue #318: a refund that is not succeeded (pending, failed,
         # canceled, ...) never paid money back, so it takes part in no total,
         # count, extreme or CSV row either.
@@ -829,6 +871,11 @@ def summarize_refunds_by_week(
     is the later of the two starts, the intersection ``_created_filter()``
     computes for ``summary`` (Issue #371).
 
+    Every refund is checked again after the list is read (Issue #390), with the
+    same lower edge the request pushed down: a refund whose ``created`` lies
+    outside the window lands in no week row, no ``合计`` line and no CSV row,
+    even when the list response carries it.
+
     Only a refund Stripe reports as ``succeeded`` is counted (Issue #352), the
     same scope ``summary`` uses (Issue #318): a refund with another ``status``
     (``pending``, ``failed``, ``canceled``, ...) never paid money back, so it
@@ -836,11 +883,19 @@ def summarize_refunds_by_week(
     commands agree on the refunds of a window.
     """
     stripe.api_key = live_secret_key()
-    filters = _created_filter(days, since, until)
+    # Issue #390: the same one resolved lower edge as `summary`, so the
+    # pushed-down `created[gte]` cutoff and the guard on the totalled refunds
+    # never disagree.
+    cutoff = _created_cutoff(days, since)
+    filters = _created_filter(None, cutoff, until)
     totals: dict[tuple[str, str], list[int]] = {}
     for refund in _list_all(
         stripe.Refund, limit=DEFAULT_LIMIT, params=filters
     ):
+        # Issue #390: a refund outside the day window lands in no week row,
+        # no `合计` line and no CSV row, even when the list response carries it.
+        if not _created_in_window(refund.created, cutoff, until):
+            continue
         # Issue #352: the same scope as `summary` (Issue #318), so both
         # commands total the same refunds for a window.  A refund that is not
         # succeeded (pending, failed, canceled, ...) never paid money back and
