@@ -82,6 +82,10 @@ REFUNDS_SUMMARY_SAMPLE_LINE = "2026-W44 usd 退款 2 笔 3.50"
 README_EXPORT_HEADING = "### 导出付款数据（export）"
 README_SUMMARY_HEADING = "### 汇总收入（summary）"
 README_REFUNDS_SUMMARY_HEADING = "### 按周汇总退款（refunds-summary）"
+# Issue #398: a short "Refund summary" section describes the summary behaviour
+# and names the commit that behaviour follows.
+README_REFUND_SUMMARY_HEADING = "## Refund summary"
+README_REFUND_SUMMARY_COMMIT = "809bb78399a49e062e7564c024e83c70a6b75834"
 # Issue #254: the top-level `--version` flag and the line it prints.
 STRIPE_VERSION_COMMAND = "python -m stripe_payments --version"
 README_VERSION_HEADING = "### 查看版本（--version）"
@@ -1353,6 +1357,42 @@ def test_readme_documents_the_refunds_summary_succeeded_scope():
     ), (
         "CHANGELOG.md must record the succeeded-only refunds-summary scope "
         "under [Unreleased]"
+    )
+
+
+# Issue #398: the README opens the refund docs with one short "Refund summary"
+# section that describes the behaviour and names the commit it follows, so a
+# reader does not have to compare two commits themselves.
+def test_readme_has_a_refund_summary_section_naming_the_commit():
+    body = _readme_section(README_REFUND_SUMMARY_HEADING)
+    assert README_REFUND_SUMMARY_COMMIT in body, (
+        f"the {README_REFUND_SUMMARY_HEADING!r} section must name the commit "
+        f"the refund summary behaviour follows "
+        f"({README_REFUND_SUMMARY_COMMIT})"
+    )
+    # The described behaviour is the one the command implements: succeeded
+    # refunds grouped by UTC ISO week and currency, backed by the detailed
+    # refunds-summary section the short section links to.
+    unwrapped = body.replace("\n", "")
+    assert "只统计 Stripe 状态为 `succeeded` 的退款" in unwrapped, (
+        f"the {README_REFUND_SUMMARY_HEADING!r} section must state the "
+        "succeeded-only refund scope"
+    )
+    assert "ISO 8601 周" in unwrapped, (
+        f"the {README_REFUND_SUMMARY_HEADING!r} section must state the UTC ISO "
+        "week grouping"
+    )
+    assert "币种" in unwrapped, (
+        f"the {README_REFUND_SUMMARY_HEADING!r} section must state the "
+        "per-currency rows"
+    )
+    assert "(#按周汇总退款refunds-summary)" in unwrapped, (
+        f"the {README_REFUND_SUMMARY_HEADING!r} section must link to "
+        f"{README_REFUNDS_SUMMARY_HEADING!r}"
+    )
+    assert "`refunds-summary`" in body, (
+        f"the {README_REFUND_SUMMARY_HEADING!r} section must name the "
+        "`refunds-summary` command"
     )
 
 
