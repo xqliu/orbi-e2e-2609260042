@@ -10,6 +10,7 @@ pre-release gate reads the check runs of the frozen base commit).
 import argparse
 import re
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1828,4 +1829,83 @@ def test_changelog_starts_with_an_empty_unreleased_section():
     # The existing Keep a Changelog section keeps every recorded entry.
     assert "\n## [Unreleased]\n" in text, (
         "CHANGELOG.md must keep its existing '## [Unreleased]' section"
+    )
+
+
+# Issue #361: one short `## Usage` section shows how to run the repository's
+# main script with a single example command, and that command really runs from
+# the repository root.
+README_USAGE_HEADING = "## Usage"
+README_USAGE_SCRIPT = "stripe_payments"
+
+
+def _readme_usage_commands() -> list:
+    """Return the commands of the `## Usage` section's one fenced example."""
+    body = _readme_section(README_USAGE_HEADING)
+    assert body.count("```") == 2, (
+        f"the {README_USAGE_HEADING!r} section must hold one fenced example "
+        f"command, got {body.count('```') // 2} fenced blocks"
+    )
+    blocks = re.findall(r"```sh\n(.*?)```", body, re.DOTALL)
+    assert len(blocks) == 1, (
+        f"the {README_USAGE_HEADING!r} section must hold exactly one fenced "
+        f"example command, got {len(blocks)}"
+    )
+    commands = [line.strip() for line in blocks[0].splitlines() if line.strip()]
+    assert len(commands) == 1, (
+        f"the {README_USAGE_HEADING!r} section must show exactly one example "
+        f"command, got {commands!r}"
+    )
+    return commands
+
+
+def test_readme_has_a_usage_section_with_one_example_command():
+    """Issue #361: the Usage section runs the main script with one command."""
+    command = _readme_usage_commands()[0]
+    assert command.startswith(f"python -m {README_USAGE_SCRIPT} "), (
+        f"the {README_USAGE_HEADING!r} example must run the main script as "
+        f"`python -m {README_USAGE_SCRIPT} ...`, got {command!r}"
+    )
+    # Every flag of the example is defined by the real top-level parser, so
+    # the documented command cannot drift away from the CLI.
+    option_strings = {
+        option
+        for action in stripe_payments._parser()._actions
+        for option in action.option_strings
+    }
+    flags = STRIPE_FLAG_RE.findall(command)
+    assert flags, (
+        f"the {README_USAGE_HEADING!r} example must pass a flag of the CLI, "
+        "so it runs without a live Stripe key"
+    )
+    for flag in flags:
+        assert flag in option_strings, (
+            f"the {README_USAGE_HEADING!r} example passes {flag!r}, which the "
+            f"top-level parser does not define ({sorted(option_strings)!r})"
+        )
+
+
+def test_readme_usage_example_command_runs_from_the_repository_root():
+    """Issue #361: the documented example command exits 0 as printed."""
+    command = _readme_usage_commands()[0]
+    argv = command.split()
+    assert argv[0] == "python", (
+        f"the {README_USAGE_HEADING!r} example must start with `python`, "
+        f"got {argv[0]!r}"
+    )
+    result = subprocess.run(
+        [sys.executable, *argv[1:]],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, (
+        f"the {README_USAGE_HEADING!r} example {command!r} failed with exit "
+        f"{result.returncode}:\n{result.stderr}"
+    )
+    # The example runs the main script, so a reader sees its real output.
+    assert f"{README_USAGE_SCRIPT} {stripe_payments.VERSION}" in result.stdout, (
+        f"the {README_USAGE_HEADING!r} example must print the main script's "
+        f"real output, got:\n{result.stdout}"
     )
