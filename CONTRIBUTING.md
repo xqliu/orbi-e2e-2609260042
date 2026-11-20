@@ -2,6 +2,8 @@
 
 本仓库不接受 pull request；要贡献，请通过 Issue 提出，详见 README 的「如何贡献」一节。
 
+新建 Issue 时请套用模板：[User outcome](.github/ISSUE_TEMPLATE/user-outcome.md) 或 [功能建议](.github/ISSUE_TEMPLATE/feature-request.md)。
+
 提问前先搜已有 Issue
 
 提 PR 前先本地跑一遍测试

@@ -1628,3 +1628,30 @@ def test_contributing_presents_the_pull_request_rules_as_a_numbered_list():
         assert rule not in standalone, (
             f"the rule {rule!r} must not stay a standalone paragraph"
         )
+
+
+# Issue #414: CONTRIBUTING.md links the two Issue templates a contributor
+# really opens, so the guide leads straight to the form to fill in.
+CONTRIBUTING_ISSUE_TEMPLATES = (
+    ".github/ISSUE_TEMPLATE/user-outcome.md",
+    ".github/ISSUE_TEMPLATE/feature-request.md",
+)
+
+
+def test_contributing_links_the_issue_templates():
+    """Issue #414: CONTRIBUTING.md links the two Issue templates."""
+    text = _read(CONTRIBUTING)
+    targets = [target.strip() for target in MARKDOWN_LINK_RE.findall(text)]
+    for template in CONTRIBUTING_ISSUE_TEMPLATES:
+        assert (REPO_ROOT / template).is_file(), f"{template} is missing"
+        assert template in targets, (
+            "CONTRIBUTING.md must link "
+            f"{template!r}, the path a contributor really opens"
+        )
+    # Every relative link on the page leads to a file that exists, so the
+    # new line cannot point at a template that was renamed or removed.
+    for target in targets:
+        resolved = (CONTRIBUTING.parent / target).resolve()
+        assert resolved.is_file(), (
+            f"CONTRIBUTING.md links {target!r}, but that file is missing"
+        )
