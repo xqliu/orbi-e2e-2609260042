@@ -65,23 +65,22 @@ CI 会在每个 PR 上运行这些检查。
 
 ## Run the tests locally
 
-在仓库根目录执行（需要 Python 3，并先安装测试依赖
-`python3 -m pip install pytest stripe`）：
+本地运行测试的命令就是下面这一条，在仓库根目录执行（需要 Python 3，并先安装
+测试依赖 `python3 -m pip install pytest stripe`）：
 
 ```sh
-python3 -m unittest discover -s tests -v
+python -m pytest
 ```
 
-测试用例是 pytest 风格的函数，`unittest` 收集不到它们，所以上面这条命令并不会
-真正跑测试：依赖装好后它报告 `Ran 0 tests`、以 `NO TESTS RAN` 结束并返回退出码
-5；依赖没装时它报 `ModuleNotFoundError: No module named 'pytest'`（或
-`'stripe'`）。这两种结果都说明测试没有运行，不等于测试通过。要在本地跑完全部
-测试，改用与 CI 相同的命令，pytest 汇总报告全部通过（例如 `44 passed`，没有
-`failed`）即成功：
+这条命令与 CI 工作流 `.github/workflows/ci.yml` 里 `Run tests` 步骤用的是同一个
+入口，pytest 汇总报告全部通过（例如 `372 passed in 159.92s`，没有 `failed`）即
+成功。
 
-```sh
-python3 -m pytest
-```
+不要用 `python3 -m unittest discover -s tests -v`：测试用例是 pytest 风格的函数，
+`unittest` 收集不到它们，所以那条命令并不会真正跑测试——依赖装好后它报告
+`Ran 0 tests`、以 `NO TESTS RAN` 结束并返回退出码 5；依赖没装时它报
+`ModuleNotFoundError: No module named 'pytest'`（或 `'stripe'`）。这两种结果都
+说明测试没有运行，不等于测试通过，改用上面的 `python -m pytest` 即可。
 
 ## Running the content checks locally
 
