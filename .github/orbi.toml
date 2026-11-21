@@ -1,5 +1,2 @@
 # Beta acceptance of the clarification proposal and /orbi split (orbi-build/orbi v0.7.20)
 clarify_thin_tickets = true
-
-# orbi-build/orbi#2309 C2: custom dispatch label (temporary, remove after the test)
-dispatch_label = "ship"
