@@ -132,6 +132,11 @@
   `error: --days must be positive, got 0 (--days 必须是正整数)`、
   `error: --days 必须是正整数，收到 'abc'`），且不调用 Stripe、不创建
   `--output-dir`、不写任何导出文件；不传时导出内容与以前完全一致。
+- `export` 子命令的末行在 `payments=... refunds=... customers=...` 之后多打印
+  `rows=<行数>`（如 `exported payments=1 refunds=1 customers=2 rows=4 to export/`），
+  数值是这次导出写出的数据行总数（三个分类的计数相加），所以不用自己再把三个数
+  加一遍；`--format both` 时同一批数据行分别写进 CSV 和 JSON 两份文件，仍按一次
+  导出计数；其余输出、文件名、列名和失败文案都不变。
 
 ### 变更
 

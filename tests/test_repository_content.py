@@ -632,7 +632,7 @@ def test_readme_documents_the_export_format_choices():
 # filter, the later `--since` edge and the failure path, and the changelog
 # records the new option.
 EXPORT_DAYS_SAMPLE_LINE = (
-    "exported payments=2 refunds=1 customers=1 to "
+    "exported payments=2 refunds=1 customers=1 rows=4 to "
     f"{stripe_payments.DEFAULT_OUTPUT_DIR}/"
 )
 
@@ -710,7 +710,7 @@ def test_readme_documents_the_export_day_window():
         "--format csv"
     )
     expected = (
-        "exported payments=1 refunds=1 customers=2 to "
+        "exported payments=1 refunds=1 customers=2 rows=4 to "
         f"{stripe_payments.DEFAULT_OUTPUT_DIR}/"
     )
     assert expected in body, (

@@ -537,7 +537,7 @@ def test_cli_export_writes_csv_and_json_for_every_category(
 
     assert exit_code == 0
     assert (
-        f"exported payments=1 refunds=1 customers=2 to {output_dir}/"
+        f"exported payments=1 refunds=1 customers=2 rows=4 to {output_dir}/"
         in capsys.readouterr().out
     )
     assert [
@@ -610,6 +610,44 @@ def test_cli_export_writes_csv_and_json_for_every_category(
     ]
 
 
+# Issue #460: after an export the last line also names how many data rows the
+# export wrote, so the operator does not add the three category counts by hand.
+def test_cli_export_prints_the_total_rows_written(
+    live_key, stripe_lists, export_date, tmp_path, capsys
+):
+    output_dir = tmp_path / "export"
+    exit_code = stripe_payments.main(["export", "--output-dir", str(output_dir)])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == (
+        f"exported payments=1 refunds=1 customers=2 rows=4 to {output_dir}/\n"
+    )
+    # Acceptance: the printed total is the data rows the three files got.
+    written = sum(
+        len(_csv_data_rows(output_dir, name))
+        for name in ("payments", "refunds", "customers")
+    )
+    assert written == 4
+
+
+def test_cli_export_prints_rows_zero_for_an_empty_account(
+    live_key, stripe_api, export_date, tmp_path, capsys
+):
+    """No record still writes the empty files and reports zero rows."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(),
+        "/v1/refunds": _list_payload(),
+        "/v1/customers": _list_payload(),
+    }
+    output_dir = tmp_path / "export"
+    exit_code = stripe_payments.main(["export", "--output-dir", str(output_dir)])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out == (
+        f"exported payments=0 refunds=0 customers=0 rows=0 to {output_dir}/\n"
+    )
+
+
 def test_export_queries_the_three_documented_list_endpoints(
     live_key, stripe_lists, tmp_path
 ):
@@ -638,7 +676,7 @@ def test_export_queries_the_three_documented_list_endpoints(
 
 
 def test_cli_export_format_narrows_the_written_files(
-    live_key, stripe_lists, export_date, tmp_path
+    live_key, stripe_lists, export_date, tmp_path, capsys
 ):
     csv_dir = tmp_path / "csv"
     json_dir = tmp_path / "json"
@@ -663,6 +701,12 @@ def test_cli_export_format_narrows_the_written_files(
         "customers-2026-10-28.json",
         "payments-2026-10-28.json",
         "refunds-2026-10-28.json",
+    ]
+    # Issue #460: the rows written are the same whichever file types are
+    # written, so the total is one export's row count, not a per-file sum.
+    assert capsys.readouterr().out.splitlines() == [
+        f"exported payments=1 refunds=1 customers=2 rows=4 to {csv_dir}/",
+        f"exported payments=1 refunds=1 customers=2 rows=4 to {json_dir}/",
     ]
 
 
@@ -963,7 +1007,7 @@ def test_export_follows_pagination_to_the_end(
 
     assert exit_code == 0
     assert (
-        f"exported payments=3 refunds=1 customers=1 to {output_dir}/"
+        f"exported payments=3 refunds=1 customers=1 rows=5 to {output_dir}/"
         in capsys.readouterr().out
     )
 
@@ -4988,7 +5032,7 @@ def test_cli_export_customer_exports_only_that_customers_payments_and_refunds(
 
     assert exit_code == 0
     assert (
-        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+        f"exported payments=1 refunds=1 customers=1 rows=3 to {output_dir}/"
         in capsys.readouterr().out
     )
 
@@ -5202,7 +5246,10 @@ def test_export_customer_without_payments_writes_no_payment_and_no_refund(
     )
 
     assert exit_code == 0
-    assert "exported payments=0 refunds=0 customers=1" in capsys.readouterr().out
+    assert (
+        "exported payments=0 refunds=0 customers=1 rows=1"
+        in capsys.readouterr().out
+    )
     assert _csv_data_rows(output_dir, "payments") == []
     assert _csv_data_rows(output_dir, "refunds") == []
 
@@ -5331,7 +5378,7 @@ def test_cli_export_email_exports_only_that_customers_records(
 
     assert exit_code == 0
     assert (
-        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+        f"exported payments=1 refunds=1 customers=1 rows=3 to {output_dir}/"
         in capsys.readouterr().out
     )
 
@@ -5742,8 +5789,9 @@ def test_module_export_email_writes_only_that_customers_records(
     )
 
     assert result.returncode == 0, result.stderr
-    assert f"exported payments=1 refunds=1 customers=1 to {output_dir}/" in (
-        result.stdout
+    assert (
+        f"exported payments=1 refunds=1 customers=1 rows=3 to {output_dir}/"
+        in result.stdout
     )
 
     # Stripe's documented filters: customers by `email`, payments by
@@ -5974,7 +6022,7 @@ def test_module_export_email_keeps_another_customers_records_out(
 
     assert result.returncode == 0, result.stderr
     assert (
-        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+        f"exported payments=1 refunds=1 customers=1 rows=3 to {output_dir}/"
         in result.stdout
     )
 
@@ -7388,7 +7436,7 @@ def test_cli_export_since_until_writes_only_the_window_records(
 
     assert exit_code == 0
     assert (
-        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+        f"exported payments=1 refunds=1 customers=1 rows=3 to {output_dir}/"
         in capsys.readouterr().out
     )
 
@@ -7510,7 +7558,7 @@ def test_export_enforces_the_day_window_on_the_rows_it_writes(
 
     assert exit_code == 0
     assert (
-        f"exported payments=2 refunds=1 customers=1 to {output_dir}/"
+        f"exported payments=2 refunds=1 customers=1 rows=4 to {output_dir}/"
         in capsys.readouterr().out
     )
     written = {
@@ -7694,7 +7742,7 @@ def test_module_export_since_until_writes_only_the_window_records(
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
     assert result.stdout.splitlines() == [
-        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+        f"exported payments=1 refunds=1 customers=1 rows=3 to {output_dir}/"
     ]
     assert [request["path"] for request in recorder.requests] == [
         "/v1/payment_intents",
@@ -7810,7 +7858,7 @@ def test_export_email_with_window_queries_the_customer_by_email_only(
     assert "no Stripe customer has the email" not in captured.err
     # The customer is outside the window, so the customers file has no row.
     assert captured.out.splitlines() == [
-        f"exported payments=1 refunds=0 customers=0 to {output_dir}/"
+        f"exported payments=1 refunds=0 customers=0 rows=1 to {output_dir}/"
     ]
 
     requests = stripe_export_email_window_lists.requests
@@ -7930,7 +7978,7 @@ def test_export_customer_with_window_keeps_the_outside_customers_email(
 
     assert exit_code == 0
     assert capsys.readouterr().out.splitlines() == [
-        f"exported payments=1 refunds=0 customers=1 to {output_dir}/"
+        f"exported payments=1 refunds=0 customers=1 rows=2 to {output_dir}/"
     ]
 
     requests = stripe_export_window_customer_lists.requests
@@ -8053,7 +8101,7 @@ def test_module_export_email_with_window_writes_the_outside_customers_email(
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
     assert result.stdout.splitlines() == [
-        f"exported payments=1 refunds=0 customers=0 to {output_dir}/"
+        f"exported payments=1 refunds=0 customers=0 rows=1 to {output_dir}/"
     ]
 
     assert [request["path"] for request in recorder.requests] == [
@@ -8128,7 +8176,7 @@ def test_module_export_customer_with_window_writes_the_customers_email(
     assert result.stderr == ""
     # The customer predates the window, so the customers file has no row.
     assert result.stdout.splitlines() == [
-        f"exported payments=1 refunds=0 customers=0 to {output_dir}/"
+        f"exported payments=1 refunds=0 customers=0 rows=1 to {output_dir}/"
     ]
     assert [request["path"] for request in recorder.requests] == [
         "/v1/payment_intents",
@@ -8264,7 +8312,7 @@ def test_export_days_sends_the_documented_created_filter(
         assert request["form"]["created[gte]"] == [str(DAYS_30_CUTOFF)]
         assert "created[lte]" not in request["form"]
     assert capsys.readouterr().out.splitlines() == [
-        f"exported payments=2 refunds=1 customers=1 to {output_dir}/"
+        f"exported payments=2 refunds=1 customers=1 rows=4 to {output_dir}/"
     ]
 
     written = {
@@ -8441,7 +8489,7 @@ def test_export_days_7_exports_only_the_last_7_days(
         assert request["form"]["created[gte]"] == [str(DAYS_7_CUTOFF)]
         assert "created[lte]" not in request["form"]
     assert capsys.readouterr().out.splitlines() == [
-        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+        f"exported payments=1 refunds=1 customers=1 rows=3 to {output_dir}/"
     ]
 
     written = {
@@ -8512,7 +8560,7 @@ def test_export_days_enforces_the_window_on_the_rows_it_writes(
 
     assert exit_code == 0
     assert (
-        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+        f"exported payments=1 refunds=1 customers=1 rows=3 to {output_dir}/"
         in capsys.readouterr().out
     )
     written = {
@@ -8604,7 +8652,7 @@ def test_export_without_days_exports_the_whole_account_as_before(
     )
 
     assert capsys.readouterr().out.splitlines() == [
-        f"exported payments=3 refunds=2 customers=2 to {output_dir}/"
+        f"exported payments=3 refunds=2 customers=2 rows=7 to {output_dir}/"
     ]
     for request in stripe_export_days_lists.requests:
         assert "created[gte]" not in request["form"]
@@ -8665,7 +8713,7 @@ def test_module_export_days_writes_only_the_window_records(
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
     assert result.stdout.splitlines() == [
-        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+        f"exported payments=1 refunds=1 customers=1 rows=3 to {output_dir}/"
     ]
     assert [request["path"] for request in recorder.requests] == [
         "/v1/payment_intents",
@@ -8807,7 +8855,7 @@ def test_module_export_days_7_writes_only_the_window_records(
     assert result.returncode == 0, result.stderr
     assert result.stderr == ""
     assert result.stdout.splitlines() == [
-        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+        f"exported payments=1 refunds=1 customers=1 rows=3 to {output_dir}/"
     ]
     window = 7 * 24 * 60 * 60
     for request in recorder.requests[:2]:

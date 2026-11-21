@@ -194,7 +194,10 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --since 2026
 互相覆盖（同一天重复导出会覆盖同名文件）。文件写到
 `--output-dir` 指定的目录，默认是 `export/`（已被 `.gitignore` 忽略）；
 `--limit` 是每次列表请求的条数（1-100，默认 10），所有记录都会被导出。命令打印
-`exported payments=... refunds=... customers=... to export/`。
+`exported payments=... refunds=... customers=... rows=... to export/`，末行的
+`rows=` 是这次导出写出的数据行总数（三个分类的计数相加，也就是三份文件各自的
+数据行数之和），所以不用自己再加一遍；`--format both` 时同一批数据行分别写进
+CSV 和 JSON 两份文件，这个数仍按一次导出计数、不会翻倍。
 
 CSV 的第一行是中文列名，打开 `payments-<日期>.csv` 就是
 `编号,金额,币种,状态,创建时间,客户邮箱`；`refunds-<日期>.csv` 是
@@ -240,7 +243,7 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --since 2026
 一条 2026-10-01 的付款，窗口内还有 2 个客户时，输出是：
 
 ```
-exported payments=1 refunds=1 customers=2 to export/
+exported payments=1 refunds=1 customers=2 rows=4 to export/
 ```
 
 `--since` / `--until` 可以和 `--customer`、`--email`、`--format`、`--limit`、
@@ -249,7 +252,7 @@ exported payments=1 refunds=1 customers=2 to export/
 （Issue #458）：`--email` 只用 `email` 条件定位客户，`payments-<日期>.csv` 的
 `客户邮箱` 列按已知的客户 id 取值，所以即使客户的 `created` 落在窗口外，
 `--email` 也照常导出窗口内的付款（这时 `customers-<日期>.csv` 没有该客户的数据行，
-末行如 `exported payments=1 refunds=0 customers=0 to export/`），
+末行如 `exported payments=1 refunds=0 customers=0 rows=1 to export/`），
 `--customer cus_old` 搭配窗口时那一列也照常写出 `cus_old` 的邮箱，而不是整列为空。
 
 只想看最近 N×24 小时内创建的记录（例如和 `summary --days 30` 同一个窗口）时加
@@ -266,19 +269,20 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --days 30 --
 Refunds 列表，Customers 列表按记录的 `created` 只留下窗口内的客户行（客户查询本身
 不受窗口限制，见上），所以 `payments-<日期>.csv`、`refunds-<日期>.csv`、
 `customers-<日期>.csv` 里不会出现窗口外的行，命令最后一行的
-`exported payments=... refunds=... customers=...` 也只数窗口内的记录；行格式、
-文件名和列名与不加 `--days` 时完全一致。例如最近 30 天有两笔付款、一笔退款和
-一个客户，31 天前还有一笔付款和一个客户时，输出是：
+`exported payments=... refunds=... customers=... rows=...` 也只数窗口内的记录；
+行格式、文件名和列名与不加 `--days` 时完全一致。例如最近 30 天有两笔付款、
+一笔退款和一个客户，31 天前还有一笔付款和一个客户时，输出是：
 
 ```
-exported payments=2 refunds=1 customers=1 to export/
+exported payments=2 refunds=1 customers=1 rows=4 to export/
 ```
 
 `--days` 与 `--since` 一起用时下界取两者更晚的那个（与 `summary`、
 `refunds-summary` 相同），`--until` 仍到当天 23:59:59Z 结束；和 `--customer`、
 `--email`、`--format`、`--limit`、`--output-dir` 一起用时，付款、退款和
 `customers-<日期>.csv` 的数据行依旧只覆盖窗口内的记录（客户查询不受窗口限制，
-见上）。不传 `--days` 时导出内容、文件名和末行输出与以前完全一致（整个账户）。
+见上）。不传 `--days` 时导出内容、文件名和末行计数与以前完全一致（整个账户），
+末行只是多了 `rows=` 这个合计。
 
 失败与修复：`--format` 只接受 `csv`、`json`、`both`，填别的值时命令以退出码 2
 结束并报 `argument --format: invalid choice: 'xml' (choose from 'csv', 'json',
@@ -886,7 +890,8 @@ UTC 日期（`YYYY-MM-DD`，例如 `payments-2026-10-28.csv`），所以不同�
 不会互相覆盖，同一天重复导出会覆盖同名文件（`summary` 的不同分组文件名不同，
 各自保留）。想换目录就传 `--output-dir`（例如
 `--output-dir 对账`），文件就写到那个目录；命令最后一行
-`exported payments=... refunds=... customers=... to export/` 也会打印出实际目录。
+`exported payments=... refunds=... customers=... rows=... to export/` 也会打印出
+实际目录。
 
 ### Q：这个仓库是什么？为什么不接受 PR？
 

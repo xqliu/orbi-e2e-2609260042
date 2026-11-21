@@ -47,6 +47,11 @@ that talks to the Stripe API with the operator's live secret key.
   ``error: --days must be positive`` validation ``summary --days N`` uses
   (Issue #442); with ``--since`` the lower edge is the later of the two
   starts, and ``--until`` still ends at the last second of its UTC day.
+  The last line reports the payments, the refunds and the customers written
+  and, after ``rows=``, their total (Issue #460), so one export's size is
+  visible without adding the three counts by hand; ``--format both`` writes
+  the same rows into the CSV and the JSON file and the total is still counted
+  once per export.
 * ``python -m stripe_payments summary`` prints the payments total, the refunds
   total and the net income per currency, one currency per line, so a daily
   check does not need the exported CSV files.  The first line names the UTC
@@ -434,6 +439,10 @@ def export_data(
     failing Stripe call (anywhere in the pagination) leaves no half-written
     export behind.  The files are named after the export date (Issue #230),
     e.g. ``payments-2026-10-28.csv``, so exports from different days coexist.
+
+    The three returned counts are the data rows each file got, so their sum is
+    the rows this export wrote (Issue #460); ``formats`` writes the same rows
+    into the CSV and/or the JSON file and does not change the counts.
     """
     stripe.api_key = live_secret_key()
     # Issue #442: the rolling ``--days`` cutoff is resolved once, the value
@@ -1920,9 +1929,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             since=since,
             until=until,
         )
+        # Issue #460: the last line also names how many data rows this export
+        # wrote, so the operator does not add the three category counts by hand.
+        # The three counts are the rows of the three files, so their sum is the
+        # total; with --format both the same rows go into the CSV and the JSON
+        # file, and the total is still counted once per export.
+        rows_written = payments + refunds + customers
         print(
             f"exported payments={payments} refunds={refunds} "
-            f"customers={customers} to {Path(args.output_dir)}/"
+            f"customers={customers} rows={rows_written} "
+            f"to {Path(args.output_dir)}/"
         )
         return 0
     except ConfigurationError as error:
