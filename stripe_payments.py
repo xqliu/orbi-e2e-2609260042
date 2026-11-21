@@ -593,6 +593,30 @@ def _date_window(
     return start, end
 
 
+def _export_days(value: str | None) -> int | None:
+    """The ``export --days N`` positive integer, ``None`` when it is omitted.
+
+    N must be a positive integer (Issue #452): a non-integer, 0 or a negative
+    value fails with the Chinese ``--days 必须是正整数`` error line and exit
+    code 2 before any list request, before the ``--output-dir`` is created
+    and before any export file is written.  A valid N keeps the rolling
+    N*24-hour window ``export --days`` documents (Issue #442).
+    """
+    if value is None:
+        return None
+    try:
+        days = int(value)
+    except ValueError:
+        raise ConfigurationError(
+            f"--days 必须是正整数，收到 {value!r}"
+        ) from None
+    if days < 1:
+        raise ConfigurationError(
+            f"--days must be positive, got {days} (--days 必须是正整数)"
+        )
+    return days
+
+
 def _created_in_window(
     created: object, since: int | None, until: int | None
 ) -> bool:
@@ -1578,12 +1602,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     export.add_argument(
         "--days",
-        type=int,
         default=None,
         metavar="N",
         help=(
             "only export the records created in the last N days "
-            "(e.g. --days 30); omitted, the whole account is exported"
+            "(e.g. --days 30), N a positive integer; omitted, the whole "
+            "account is exported"
         ),
     )
     export.add_argument(
@@ -1862,13 +1886,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "--email and --customer cannot be combined: pass the "
                 "customer's email or its cus_... id, not both"
             )
-        # Issue #442: the same positive `--days` window as `summary`
-        # (Issue #271), rejected before any list request and before the
-        # --output-dir is created.
-        if args.days is not None and args.days < 1:
-            raise ConfigurationError(
-                f"--days must be positive, got {args.days}"
-            )
+        # Issue #452: `export --days N` takes a positive integer only, so a
+        # non-integer, 0 or negative N prints the Chinese
+        # "--days 必须是正整数" error line and exits 2 before any list request,
+        # before the --output-dir is created and before any export file
+        # (Issue #442's same rolling N*24-hour window as `summary`).
+        days = _export_days(args.days)
         # Issue #312: a malformed or reversed date fails before any list
         # request and before the --output-dir is created.  Like the summary
         # (Issue #303), Stripe's inclusive ``created[lte]`` edge is the last
@@ -1882,7 +1905,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             limit=args.limit,
             customer=args.customer or None,
             email=args.email or None,
-            days=args.days,
+            days=days,
             since=since,
             until=until,
         )

@@ -7949,6 +7949,85 @@ def test_export_days_rejects_a_non_positive_window(
     assert not output_dir.exists()
 
 
+# Issue #452: `export --days N` takes a positive integer only.  A
+# non-integer, 0 or negative N prints the Chinese "--days 必须是正整数" error
+# line on stderr and exits 2 before any Stripe request, before the
+# --output-dir is created and before any export file is written.
+@pytest.mark.parametrize("value", ["0", "-3", "abc"])
+def test_export_days_requires_a_positive_integer(
+    live_key, stripe_api, tmp_path, value, capsys
+):
+    """Acceptance: 0, -3 and abc exit 2 with the Chinese message, no file."""
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "export",
+            "--days",
+            value,
+            "--format",
+            "csv",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert captured.err.startswith("error: ")
+    assert "--days 必须是正整数" in captured.err
+    assert captured.out == ""
+    assert stripe_api.requests == []
+    assert not output_dir.exists()
+
+
+def test_export_days_7_exports_only_the_last_7_days(
+    live_key,
+    summary_days_clock,
+    stripe_export_days_lists,
+    export_date,
+    tmp_path,
+    capsys,
+):
+    """Acceptance: --days 7 exports the last 7 days, as before."""
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "export",
+            "--days",
+            "7",
+            "--format",
+            "csv",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    for request in stripe_export_days_lists.requests:
+        assert request["form"]["created[gte]"] == [str(DAYS_7_CUTOFF)]
+        assert "created[lte]" not in request["form"]
+    assert capsys.readouterr().out.splitlines() == [
+        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+    ]
+
+    written = {
+        category: list(
+            csv.reader(
+                _export_file(output_dir, category, "csv").open(
+                    newline="", encoding="utf-8"
+                )
+            )
+        )
+        for category in ("payments", "refunds", "customers")
+    }
+    # The 30-day-old records stay out of the 7-day window's files.
+    assert [row[0] for row in written["payments"][1:]] == ["pi_recent"]
+    assert [row[0] for row in written["refunds"][1:]] == ["re_recent"]
+    assert [row[0] for row in written["customers"][1:]] == ["cus_recent"]
+
+
 def test_export_days_enforces_the_window_on_the_rows_it_writes(
     live_key, summary_days_clock, export_date, tmp_path, capsys, monkeypatch
 ):
@@ -8210,6 +8289,109 @@ def test_module_export_days_rejects_a_non_positive_window_without_writing(
     assert "error: --days must be positive, got 0" in result.stderr
     assert result.stdout == ""
     assert not output_dir.exists()
+
+
+# Issue #452: the real user command `python -m stripe_payments export --days N`
+# rejects a non-integer, 0 and a negative N with the Chinese
+# "--days 必须是正整数" error line, exit code 2 and no export file, and still
+# exports normally for a positive N such as 7.
+@pytest.mark.parametrize("value", ["0", "-3", "abc"])
+def test_module_export_days_requires_a_positive_integer(tmp_path, value):
+    """The real entry point fails on 0, -3 and abc without writing a file."""
+    env = {
+        key: item
+        for key, item in os.environ.items()
+        if key != stripe_payments.LIVE_SECRET_KEY_ENV
+    }
+    output_dir = tmp_path / "export"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "stripe_payments",
+            "export",
+            "--days",
+            value,
+            "--output-dir",
+            str(output_dir),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "--days 必须是正整数" in result.stderr
+    assert result.stderr.startswith("error: ")
+    assert not output_dir.exists()
+
+
+def test_module_export_days_7_writes_only_the_window_records(
+    local_stripe_server, tmp_path
+):
+    """The real user entry point: `python -m stripe_payments export --days 7`."""
+    recorder, server = local_stripe_server
+    now_before = stripe_payments._now_timestamp()
+    recorder.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _window_intent("pi_recent", 111, now_before - 24 * 60 * 60),
+            _window_intent("pi_old", 900, now_before - 8 * 24 * 60 * 60),
+        ),
+        "/v1/refunds": _list_payload(
+            _window_refund(
+                "re_recent", 25, now_before - 24 * 60 * 60, "pi_recent"
+            ),
+            _window_refund(
+                "re_old", 30, now_before - 8 * 24 * 60 * 60, "pi_old"
+            ),
+        ),
+        "/v1/customers": _list_payload(
+            _window_customer(
+                "cus_recent", now_before - 24 * 60 * 60, "buyer@example.com"
+            ),
+            _window_customer("cus_old", now_before - 8 * 24 * 60 * 60),
+        ),
+    }
+    output_dir = tmp_path / "export"
+
+    result = _run_module_command(
+        server,
+        [
+            "export",
+            "--days",
+            "7",
+            "--format",
+            "csv",
+            "--output-dir",
+            str(output_dir),
+        ],
+        tmp_path,
+    )
+    now_after = stripe_payments._now_timestamp()
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout.splitlines() == [
+        f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
+    ]
+    window = 7 * 24 * 60 * 60
+    for request in recorder.requests:
+        # The cutoff is the subprocess's own "now" minus 7*24 hours.
+        cutoff = int(request["form"]["created[gte]"][0])
+        assert now_before - window <= cutoff <= now_after - window
+        assert "created[lte]" not in request["form"]
+
+    payments = list(
+        csv.reader(
+            _dated_export_file(output_dir, "payments", "csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
+    )
+    assert [row[0] for row in payments[1:]] == ["pi_recent"]
 
 
 # --- summary counts only succeeded records (Issue #318) ------------------

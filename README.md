@@ -253,7 +253,8 @@ exported payments=1 refunds=1 customers=2 to export/
 指定客户、把窗口只套在付款和退款上即可。
 
 只想看最近 N×24 小时内创建的记录（例如和 `summary --days 30` 同一个窗口）时加
-`--days N`：
+`--days N`，N 必须是正整数（如 `--days 7`）；传 0、负数或非整数时命令直接报错
+退出码 2，不导出任何文件：
 
 ```sh
 STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --days 30 --format csv
@@ -289,9 +290,11 @@ Stripe 里的不一致）时命令以退出码 2 结束并报
 此时只查了一次 Customers 列表、没有写任何文件；按 Stripe Dashboard 里的拼写
 重跑即可。`--email` 和 `--customer` 同时给出时报
 `error: --email and --customer cannot be combined: pass the customer's email or its cus_... id, not both`，
-去掉其中一个再运行。`--days` 传 0 或负数时以退出码 2 结束并报
-`error: --days must be positive, got 0`，在发出任何 Stripe 请求、创建
-`--output-dir` 之前就失败，改成正整数（如 `--days 30`）后重跑。
+去掉其中一个再运行。`--days` 的 N 必须是正整数，传 0 或负数时以退出码 2 结束
+并报 `error: --days must be positive, got 0 (--days 必须是正整数)`，传非整数
+（如 `abc`）时报 `error: --days 必须是正整数，收到 'abc'`；两种情况都在发出任何
+Stripe 请求、创建 `--output-dir` 之前就失败、不写任何导出文件，改成正整数
+（如 `--days 30`）后重跑。
 `--since` / `--until` 传的不是 `YYYY-MM-DD` 日期时以退出码 2 结束并报
 `error: --since must be a YYYY-MM-DD date, got '2026-13-01'`；
 `--since` 晚于 `--until` 时报
