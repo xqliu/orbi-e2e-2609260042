@@ -1,2 +1,5 @@
 # Beta acceptance of the clarification proposal and /orbi split (orbi-build/orbi v0.7.20)
 clarify_thin_tickets = true
+
+# orbi-build/orbi-cloud#3708 beta acceptance: custom queue label (temporary)
+dispatch_label = "ship"
