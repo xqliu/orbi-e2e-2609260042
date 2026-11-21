@@ -144,9 +144,13 @@ README_ENGINE_CHECK_V0745_LINE = "Engine check: v0.7.45 (2026-11-16)"
 # Issue #343 appends this exact line as the README final line; Issue #349
 # appends the contributing note after it, so it stays in the README.
 README_TRIAL_CHECK_LINE = "Trial check (2026-11-18)"
-# Issue #26 appends this exact line as the new README final line; the
-# Issue #349 contributing note stays right above it.
-README_LAST_LINE = "测试命令：`python -m pytest`"
+# Issue #26 appends this exact line as the README final line; Issue #455
+# appends the changelog line after it, so it stays in the README.
+README_TEST_COMMAND_LINE = "测试命令：`python -m pytest`"
+# Issue #455 appends this exact line as the new README final line.
+README_LAST_LINE = "- 2026-11-21: C4 label check."
+# Issue #455 closes the README with a `## Changelog` section holding that line.
+README_CHANGELOG_HEADING = "## Changelog"
 ISSUE_TEMPLATE_SECTIONS = (
     "## User outcome",
     "## Preconditions",
@@ -471,11 +475,16 @@ def test_readme_states_the_test_command_up_front():
 
 
 def test_readme_ends_with_the_beta_acceptance_note():
-    """Issue #26: the README ends with the test command note."""
+    """Issue #455: the README ends with the changelog line."""
     lines = [line for line in _read(README).splitlines() if line.strip()]
     assert lines[-1] == README_LAST_LINE, (
         f"the README must end with the {README_LAST_LINE!r} line, "
         f"got {lines[-1]!r}"
+    )
+    # Issue #26's test command note stays in the README, right above the new
+    # changelog section, so appending it does not drop the line.
+    assert README_TEST_COMMAND_LINE in lines, (
+        f"the README must still carry the {README_TEST_COMMAND_LINE!r} line"
     )
     # Issue #337's engine check line stays in the README, right above the new
     # one, so appending the cloud check and the new engine check lines does
@@ -1883,6 +1892,23 @@ def test_readme_has_a_usage_section_with_one_example_command():
             f"the {README_USAGE_HEADING!r} example passes {flag!r}, which the "
             f"top-level parser does not define ({sorted(option_strings)!r})"
         )
+
+
+def test_readme_ends_with_a_changelog_section_holding_the_c4_line():
+    """Issue #455: the README closes with a `## Changelog` section."""
+    body = _readme_section(README_CHANGELOG_HEADING)
+    lines = [line for line in body.splitlines() if line.strip()]
+    assert lines == [README_LAST_LINE], (
+        f"the {README_CHANGELOG_HEADING!r} section must hold exactly the "
+        f"{README_LAST_LINE!r} line, got {lines!r}"
+    )
+    # The section is the README's last `## ` section, so the changelog sits
+    # at the end of the rendered page instead of inside another section.
+    text = _read(README).rstrip("\n")
+    assert text.endswith(f"{README_CHANGELOG_HEADING}\n\n{README_LAST_LINE}"), (
+        f"the README must end with the {README_CHANGELOG_HEADING!r} section, "
+        "after every other section"
+    )
 
 
 def test_readme_usage_example_command_runs_from_the_repository_root():
