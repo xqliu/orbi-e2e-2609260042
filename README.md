@@ -984,3 +984,7 @@ Version moves are tested on beta.
 Out-of-version rows are tested on beta.
 Prerequisite rows are tested on beta.
 测试命令：`python -m pytest`
+
+## Changelog
+
+- 2026-11-21: C4 label check.
