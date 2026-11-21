@@ -184,6 +184,13 @@
   或 `--csv` 写出的文件；`--days N` 的滚动截止时刻每次运行只取一次「现在」，
   所以下推的 `created[gte]` 与实际统计的记录永远用同一个时间点；不传日期
   选项时不过滤任何记录，输出与以前完全一致。
+- `export` 子命令的 `--since` / `--until` / `--days` 日期窗口不再决定客户
+  查询与 `payments-<日期>.csv` 的 `客户邮箱` 列：Customers 列表不再带
+  `created[gte]` / `created[lte]`，`--email` 只用 `email` 条件定位客户，所以
+  客户 `created` 落在窗口外时也照常导出窗口内的付款（不再以退出码 2 报
+  `no Stripe customer has the email`），`--customer cus_...` 搭配窗口时该列也
+  写出该客户的邮箱而不是整列为空；窗口仍筛付款、退款和 `customers-<日期>.csv`
+  的数据行，邮箱真的不存在时的报错文案、文件名、列名和末行 `exported ...` 都不变。
 
 ## [v0.6.106] - 2026-09-28
 

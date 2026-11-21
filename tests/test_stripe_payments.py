@@ -7292,8 +7292,8 @@ def test_module_summary_since_until_totals_the_window(
 # list filters, both day edges included.
 
 
-def _window_intent(identifier, amount, created):
-    return {
+def _window_intent(identifier, amount, created, customer=None):
+    record = {
         "id": identifier,
         "object": "payment_intent",
         "amount": amount,
@@ -7301,6 +7301,9 @@ def _window_intent(identifier, amount, created):
         "status": "succeeded",
         "created": created,
     }
+    if customer is not None:
+        record["customer"] = customer
+    return record
 
 
 def _window_refund(identifier, amount, created, payment_intent):
@@ -7392,9 +7395,15 @@ def test_cli_export_since_until_writes_only_the_window_records(
     assert [
         request["path"] for request in stripe_export_window_lists.requests
     ] == ["/v1/payment_intents", "/v1/refunds", "/v1/customers"]
-    for request in stripe_export_window_lists.requests:
+    # Issue #458: the payments and the refunds are read inside the window; the
+    # Customer query is not windowed, so the 客户邮箱 column can resolve a
+    # customer created before it.
+    for request in stripe_export_window_lists.requests[:2]:
         assert request["form"]["created[gte]"] == [str(WINDOW_START)]
         assert request["form"]["created[lte]"] == [str(WINDOW_END)]
+    assert (
+        "created[gte]" not in stripe_export_window_lists.requests[2]["form"]
+    )
 
     assert list(
         csv.reader(
@@ -7561,7 +7570,8 @@ def test_export_with_only_one_window_edge_leaves_the_other_unfiltered(
     )
 
     assert len(stripe_export_window_lists.requests) == 3
-    for request in stripe_export_window_lists.requests:
+    # Issue #458: the window only reaches the payments and the refunds.
+    for request in stripe_export_window_lists.requests[:2]:
         assert present in request["form"]
         assert absent not in request["form"]
         assert request["form"][present] == [
@@ -7691,7 +7701,9 @@ def test_module_export_since_until_writes_only_the_window_records(
         "/v1/refunds",
         "/v1/customers",
     ]
-    for request in recorder.requests:
+    # Issue #458: the payments and the refunds keep the window; the Customer
+    # query does not.
+    for request in recorder.requests[:2]:
         assert request["form"]["created[gte]"] == [str(WINDOW_START)]
         assert request["form"]["created[lte]"] == [str(WINDOW_END)]
 
@@ -7724,6 +7736,424 @@ def test_module_export_since_until_writes_only_the_window_records(
     )
     assert customers[1:] == [
         ["cus_in", "buyer@example.com", "2026-09-15T00:00:00Z"]
+    ]
+
+# --- export 的日期窗口与客户查询 (Issue #458) ---------------------------
+#
+# Issue #458: `--since`/`--until` still narrow the payments, the refunds and
+# the rows of `customers-<date>.csv`, but the window no longer decides the
+# Customer query nor the `客户邮箱` column: `--email` locates the customer by
+# the email alone, and the email column is resolved from every customer the
+# export knows, even one created before the window.
+
+OUTSIDE_WINDOW_CUSTOMER_CREATED = _utc(2026, 8, 1, 0, 0, 0)
+
+
+@pytest.fixture
+def stripe_export_email_window_lists(stripe_api):
+    """The lists of `export --email ... --since ... --until ...`.
+
+    The one customer of that address was created before the window, so only a
+    Customer query freed from the window can find it.
+    """
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            # Created before the window: the window keeps it out of the files.
+            _window_intent(
+                "pi_aug",
+                800,
+                _utc(2026, 8, 31, 23, 59, 59),
+                customer="cus_old",
+            ),
+            _window_intent(
+                "pi_win", 2500, _utc(2026, 9, 10), customer="cus_old"
+            ),
+        ),
+        "/v1/refunds": _list_payload(),
+        # Stripe's documented `email` filter is the exact match, so the
+        # customer comes back whatever its `created` is.
+        "/v1/customers": _list_payload(
+            _window_customer(
+                "cus_old",
+                OUTSIDE_WINDOW_CUSTOMER_CREATED,
+                "buyer@example.com",
+            )
+        ),
+    }
+    return stripe_api
+
+
+def test_export_email_with_window_queries_the_customer_by_email_only(
+    live_key, stripe_export_email_window_lists, export_date, tmp_path, capsys
+):
+    """Acceptance: a customer created before the window still matches --email."""
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "export",
+            "--output-dir",
+            str(output_dir),
+            "--email",
+            "buyer@example.com",
+            "--since",
+            WINDOW_SINCE,
+            "--until",
+            WINDOW_UNTIL,
+            "--format",
+            "csv",
+        ]
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "no Stripe customer has the email" not in captured.err
+    # The customer is outside the window, so the customers file has no row.
+    assert captured.out.splitlines() == [
+        f"exported payments=1 refunds=0 customers=0 to {output_dir}/"
+    ]
+
+    requests = stripe_export_email_window_lists.requests
+    assert [request["path"] for request in requests] == [
+        "/v1/customers",
+        "/v1/payment_intents",
+        "/v1/refunds",
+    ]
+    # The window no longer decides the Customer query: the email is its only
+    # filter, so a customer created before the window is still found.
+    assert requests[0]["form"]["email"] == ["buyer@example.com"]
+    assert "created[gte]" not in requests[0]["form"]
+    assert "created[lte]" not in requests[0]["form"]
+    # The payments and refunds keep the documented day window.
+    for request in requests[1:]:
+        assert request["form"]["created[gte]"] == [str(WINDOW_START)]
+        assert request["form"]["created[lte]"] == [str(WINDOW_END)]
+
+    assert _csv_rows(output_dir, "payments")[1:] == [
+        [
+            "pi_win",
+            "2500",
+            "usd",
+            "succeeded",
+            "2026-09-10T00:00:00Z",
+            "buyer@example.com",
+        ]
+    ]
+    assert _csv_rows(output_dir, "customers")[1:] == []
+
+
+def test_export_email_unknown_address_with_a_window_fails_before_writing(
+    live_key, stripe_api, export_date, tmp_path, capsys
+):
+    """Acceptance: a really unknown address keeps the existing error and exit 2."""
+    stripe_api.list_payloads = {"/v1/customers": _list_payload()}
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "export",
+            "--output-dir",
+            str(output_dir),
+            "--email",
+            "nobody@example.com",
+            "--since",
+            WINDOW_SINCE,
+            "--until",
+            WINDOW_UNTIL,
+        ]
+    )
+
+    assert exit_code == 2
+    assert (
+        "error: no Stripe customer has the email 'nobody@example.com'"
+        in capsys.readouterr().err
+    )
+    # One Customer query only, with the email as its only filter: no payment
+    # or refund request and no file.
+    assert [request["path"] for request in stripe_api.requests] == [
+        "/v1/customers"
+    ]
+    assert stripe_api.requests[0]["form"]["email"] == ["nobody@example.com"]
+    assert "created[gte]" not in stripe_api.requests[0]["form"]
+    assert not output_dir.exists()
+
+
+@pytest.fixture
+def stripe_export_window_customer_lists(stripe_api):
+    """The lists of a window export whose payment customer predates it."""
+    stripe_api.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _window_intent(
+                "pi_aug",
+                800,
+                _utc(2026, 8, 31, 23, 59, 59),
+                customer="cus_old",
+            ),
+            _window_intent(
+                "pi_win", 2500, _utc(2026, 9, 10), customer="cus_old"
+            ),
+        ),
+        "/v1/refunds": _list_payload(),
+        "/v1/customers": _list_payload(
+            _window_customer(
+                "cus_old",
+                OUTSIDE_WINDOW_CUSTOMER_CREATED,
+                "buyer@example.com",
+            ),
+            _window_customer("cus_in", _utc(2026, 9, 15), "in@example.com"),
+        ),
+    }
+    return stripe_api
+
+
+def test_export_customer_with_window_keeps_the_outside_customers_email(
+    live_key, stripe_export_window_customer_lists, export_date, tmp_path, capsys
+):
+    """Acceptance: --customer fills 客户邮箱 although its customer predates it."""
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "export",
+            "--output-dir",
+            str(output_dir),
+            "--customer",
+            "cus_old",
+            "--since",
+            WINDOW_SINCE,
+            "--until",
+            WINDOW_UNTIL,
+            "--format",
+            "csv",
+        ]
+    )
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.splitlines() == [
+        f"exported payments=1 refunds=0 customers=1 to {output_dir}/"
+    ]
+
+    requests = stripe_export_window_customer_lists.requests
+    assert [request["path"] for request in requests] == [
+        "/v1/payment_intents",
+        "/v1/refunds",
+        "/v1/customers",
+    ]
+    for request in requests[:2]:
+        assert request["form"]["created[gte]"] == [str(WINDOW_START)]
+        assert request["form"]["created[lte]"] == [str(WINDOW_END)]
+    # The Customer query is not windowed, so cus_old is known even though it
+    # was created before the window.
+    assert "created[gte]" not in requests[2]["form"]
+    assert "created[lte]" not in requests[2]["form"]
+
+
+    assert _csv_rows(output_dir, "payments") == [
+        ["编号", "客户", "金额", "币种", "状态", "创建时间", "客户邮箱"],
+        [
+            "pi_win",
+            "cus_old",
+            "2500",
+            "usd",
+            "succeeded",
+            "2026-09-10T00:00:00Z",
+            "buyer@example.com",
+        ],
+    ]
+    # The customers file still holds only the customers created in the window.
+    assert _csv_rows(output_dir, "customers")[1:] == [
+        ["cus_in", "in@example.com", "2026-09-15T00:00:00Z"]
+    ]
+
+
+def test_export_window_fills_the_email_of_a_customer_created_before_it(
+    live_key, stripe_export_window_customer_lists, export_date, tmp_path
+):
+    """Acceptance: the window no longer empties the 客户邮箱 column."""
+    output_dir = tmp_path / "export"
+
+    assert (
+        stripe_payments.main(
+            [
+                "export",
+                "--since",
+                WINDOW_SINCE,
+                "--until",
+                WINDOW_UNTIL,
+                "--format",
+                "csv",
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
+        == 0
+    )
+
+    assert _csv_rows(output_dir, "payments")[1:] == [
+        [
+            "pi_win",
+            "2500",
+            "usd",
+            "succeeded",
+            "2026-09-10T00:00:00Z",
+            "buyer@example.com",
+        ]
+    ]
+    assert _csv_rows(output_dir, "customers")[1:] == [
+        ["cus_in", "in@example.com", "2026-09-15T00:00:00Z"]
+    ]
+
+
+def test_module_export_email_with_window_writes_the_outside_customers_email(
+    local_stripe_server, tmp_path
+):
+    """The real user command: `export --email ... --since ... --until ...`."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _window_intent(
+                "pi_aug",
+                800,
+                _utc(2026, 8, 31, 23, 59, 59),
+                customer="cus_old",
+            ),
+            _window_intent(
+                "pi_win", 2500, _utc(2026, 9, 10), customer="cus_old"
+            ),
+        ),
+        "/v1/refunds": _list_payload(),
+        "/v1/customers": _list_payload(
+            _window_customer(
+                "cus_old",
+                OUTSIDE_WINDOW_CUSTOMER_CREATED,
+                "buyer@example.com",
+            )
+        ),
+    }
+    output_dir = tmp_path / "export"
+
+    result = _run_module_command(
+        server,
+        [
+            "export",
+            "--output-dir",
+            str(output_dir),
+            "--email",
+            "buyer@example.com",
+            "--since",
+            WINDOW_SINCE,
+            "--until",
+            WINDOW_UNTIL,
+            "--format",
+            "csv",
+        ],
+        tmp_path,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    assert result.stdout.splitlines() == [
+        f"exported payments=1 refunds=0 customers=0 to {output_dir}/"
+    ]
+
+    assert [request["path"] for request in recorder.requests] == [
+        "/v1/customers",
+        "/v1/payment_intents",
+        "/v1/refunds",
+    ]
+    assert recorder.requests[0]["form"]["email"] == ["buyer@example.com"]
+    assert "created[gte]" not in recorder.requests[0]["form"]
+    assert recorder.requests[1]["form"]["created[gte]"] == [str(WINDOW_START)]
+    assert recorder.requests[1]["form"]["created[lte]"] == [str(WINDOW_END)]
+
+    payments = list(
+        csv.reader(
+            _dated_export_file(output_dir, "payments", "csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
+    )
+    assert payments[1:] == [
+        [
+            "pi_win",
+            "2500",
+            "usd",
+            "succeeded",
+            "2026-09-10T00:00:00Z",
+            "buyer@example.com",
+        ]
+    ]
+
+def test_module_export_customer_with_window_writes_the_customers_email(
+    local_stripe_server, tmp_path
+):
+    """The real user command: `export --customer cus_old --since ...`."""
+    recorder, server = local_stripe_server
+    recorder.list_payloads = {
+        "/v1/payment_intents": _list_payload(
+            _window_intent(
+                "pi_win", 2500, _utc(2026, 9, 10), customer="cus_old"
+            )
+        ),
+        "/v1/refunds": _list_payload(),
+        "/v1/customers": _list_payload(
+            _window_customer(
+                "cus_old",
+                OUTSIDE_WINDOW_CUSTOMER_CREATED,
+                "buyer@example.com",
+            )
+        ),
+    }
+    output_dir = tmp_path / "export"
+
+    result = _run_module_command(
+        server,
+        [
+            "export",
+            "--output-dir",
+            str(output_dir),
+            "--customer",
+            "cus_old",
+            "--since",
+            WINDOW_SINCE,
+            "--until",
+            WINDOW_UNTIL,
+            "--format",
+            "csv",
+        ],
+        tmp_path,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    # The customer predates the window, so the customers file has no row.
+    assert result.stdout.splitlines() == [
+        f"exported payments=1 refunds=0 customers=0 to {output_dir}/"
+    ]
+    assert [request["path"] for request in recorder.requests] == [
+        "/v1/payment_intents",
+        "/v1/refunds",
+        "/v1/customers",
+    ]
+    assert "created[gte]" not in recorder.requests[2]["form"]
+
+    payments = list(
+        csv.reader(
+            _dated_export_file(output_dir, "payments", "csv").open(
+                newline="", encoding="utf-8"
+            )
+        )
+    )
+    assert payments[1:] == [
+        [
+            "pi_win",
+            "cus_old",
+            "2500",
+            "usd",
+            "succeeded",
+            "2026-09-10T00:00:00Z",
+            "buyer@example.com",
+        ]
     ]
 
 def test_module_export_since_until_rejects_a_bad_date_without_writing(
@@ -7828,7 +8258,9 @@ def test_export_days_sends_the_documented_created_filter(
     assert [
         request["path"] for request in stripe_export_days_lists.requests
     ] == ["/v1/payment_intents", "/v1/refunds", "/v1/customers"]
-    for request in stripe_export_days_lists.requests:
+    # Issue #458: --days reaches the payments and the refunds, not the
+    # Customer query.
+    for request in stripe_export_days_lists.requests[:2]:
         assert request["form"]["created[gte]"] == [str(DAYS_30_CUTOFF)]
         assert "created[lte]" not in request["form"]
     assert capsys.readouterr().out.splitlines() == [
@@ -7890,7 +8322,7 @@ def test_export_days_and_since_keep_the_later_lower_edge(
     )
 
     assert len(stripe_export_days_lists.requests) == 3
-    for request in stripe_export_days_lists.requests:
+    for request in stripe_export_days_lists.requests[:2]:
         assert request["form"]["created[gte]"] == [str(expected_gte)]
 
 
@@ -7915,7 +8347,7 @@ def test_export_days_with_until_keeps_the_last_second_of_its_day(
         == 0
     )
 
-    for request in stripe_export_days_lists.requests:
+    for request in stripe_export_days_lists.requests[:2]:
         form = request["form"]
         assert form["created[gte]"] == [str(DAYS_30_CUTOFF)]
         assert form["created[lte]"] == [str(_utc(2026, 10, 1, 23, 59, 59))]
@@ -8005,7 +8437,7 @@ def test_export_days_7_exports_only_the_last_7_days(
     )
 
     assert exit_code == 0
-    for request in stripe_export_days_lists.requests:
+    for request in stripe_export_days_lists.requests[:2]:
         assert request["form"]["created[gte]"] == [str(DAYS_7_CUTOFF)]
         assert "created[lte]" not in request["form"]
     assert capsys.readouterr().out.splitlines() == [
@@ -8141,7 +8573,7 @@ def test_export_days_and_summary_days_read_the_same_window(
     # The export detail carries the same 100 usd cents the summary totals.
     assert [row[2] for row in refund_rows[1:]] == ["100"]
     assert {
-        request["form"]["created[gte]"][0] for request in export_requests
+        request["form"]["created[gte]"][0] for request in export_requests[:2]
     } == {str(DAYS_30_CUTOFF)}
     for request in stripe_export_days_lists.requests:
         assert request["form"]["created[gte]"] == [str(DAYS_30_CUTOFF)]
@@ -8241,7 +8673,7 @@ def test_module_export_days_writes_only_the_window_records(
         "/v1/customers",
     ]
     window = 30 * 24 * 60 * 60
-    for request in recorder.requests:
+    for request in recorder.requests[:2]:
         # The cutoff is the subprocess's own "now" minus 30*24 hours.
         cutoff = int(request["form"]["created[gte]"][0])
         assert now_before - window <= cutoff <= now_after - window
@@ -8378,7 +8810,7 @@ def test_module_export_days_7_writes_only_the_window_records(
         f"exported payments=1 refunds=1 customers=1 to {output_dir}/"
     ]
     window = 7 * 24 * 60 * 60
-    for request in recorder.requests:
+    for request in recorder.requests[:2]:
         # The cutoff is the subprocess's own "now" minus 7*24 hours.
         cutoff = int(request["form"]["created[gte]"][0])
         assert now_before - window <= cutoff <= now_after - window

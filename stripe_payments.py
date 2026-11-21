@@ -23,7 +23,9 @@ that talks to the Stripe API with the operator's live secret key.
   The ``客户邮箱`` column (Issue #239) is the paying customer's email, read
   from the Customers list the export already fetches; a payment without a
   customer, a customer without an email and a customer id outside the
-  exported list leave it empty.
+  exported list leave it empty.  The Customers list is never narrowed by a
+  date window (Issue #458), so a payment inside the window still shows the
+  email of a customer created before it.
   ``--customer cus_...`` narrows the export to one customer's payments and
   refunds (``payments-<date>.csv`` then also carries a ``customer`` column,
   CSV header ``客户``); omitted, the whole account is exported as before.
@@ -35,9 +37,11 @@ that talks to the Stripe API with the operator's live secret key.
   ``--customer`` does.  An address that matches no customer fails with a
   message naming it instead of writing an empty export.
   ``--since 2026-09-01 --until 2026-09-30`` exports only the records created
-  inside that inclusive UTC date window, via Stripe's ``created[gte]`` /
-  ``created[lte]`` list filters on all three lists (Issue #312); either date
-  works alone, and a malformed or reversed date fails before any request.
+  inside that inclusive UTC date window (Issue #312): the PaymentIntents and
+  Refunds lists take Stripe's ``created[gte]`` / ``created[lte]`` filters and
+  the customers file keeps only the customers created inside it, while the
+  Customer query itself stays unwindowed (Issue #458); either date works
+  alone, and a malformed or reversed date fails before any request.
   ``--days 30`` exports only the records created in the rolling last
   N*24 hours instead, the same window and the same
   ``error: --days must be positive`` validation ``summary --days N`` uses
@@ -408,19 +412,23 @@ def export_data(
     filter turns a typo into an empty list rather than an error.
 
     And ``since``/``until`` (the first and the last UTC epoch second the
-    ``_date_window()`` dates name) narrow every list to that UTC day window
-    (Issue #312): all three take the documented ``created[gte]`` /
+    ``_date_window()`` dates name) narrow the payments, the refunds and the
+    rows of the customers file to that UTC day window (Issue #312): the
+    PaymentIntents and Refunds lists take the documented ``created[gte]`` /
     ``created[lte]`` filters, so only the records created inside the window
-    are read and written.  Omitted, the side is unfiltered and the whole
-    account is exported as before.
+    are written.  Omitted, the side is unfiltered and the whole account is
+    exported as before.  The Customer query is not windowed (Issue #458): a
+    payment inside the window may belong to a customer created before it, so
+    the ``客户邮箱`` column is resolved from the whole customer list while the
+    customers file keeps only the customers created inside the window.
 
     ``days`` narrows the same window to the rolling ``days``*24 hours ending
     now (Issue #442), the window ``summary --days``/``refunds-summary --days``
-    use: all three lists take the documented ``created[gte]`` cutoff, a
-    record exactly on the cutoff is included, and with ``since`` too the
-    lower edge is the later of the two starts.  The cutoff is resolved once,
-    so the pushed-down request and the per-record guard never disagree
-    (Issue #390).
+    use: the PaymentIntents and Refunds lists take the documented
+    ``created[gte]`` cutoff, a record exactly on the cutoff is included, and
+    with ``since`` too the lower edge is the later of the two starts.  The
+    cutoff is resolved once, so the pushed-down request and the per-record
+    guard never disagree (Issue #390).
 
     Every page of all three lists is fetched before any file is written, so a
     failing Stripe call (anywhere in the pagination) leaves no half-written
@@ -434,12 +442,12 @@ def export_data(
     created_filters = _created_filter(None, cutoff, until)
     narrowed = customer is not None or email is not None
     if email is not None:
+        # Issue #458: the window does not decide the Customer query.  Stripe's
+        # documented ``email`` filter is its only condition, so a customer
+        # created before the window still matches and its payments inside the
+        # window are exported.
         customers = list(
-            _list_all(
-                stripe.Customer,
-                limit=limit,
-                params={"email": email, **created_filters},
-            )
+            _list_all(stripe.Customer, limit=limit, params={"email": email})
         )
         if not customers:
             raise ConfigurationError(
@@ -489,22 +497,25 @@ def export_data(
         and _created_in_window(refund.created, cutoff, until)
     ]
     if customers is None:
-        customers = list(
-            _list_all(stripe.Customer, limit=limit, params=created_filters)
-        )
+        # Issue #458: the Customers list is not windowed either, because the
+        # ``客户邮箱`` column is resolved from it: a payment inside the window
+        # may belong to a customer created before it.
+        customers = list(_list_all(stripe.Customer, limit=limit))
+    # Issue #239: the payments CSV shows who paid.  The Customers list is
+    # already read for the customers export, so the email column reuses it:
+    # ``{customer id: email}`` maps each payment's documented ``customer`` id
+    # to that customer's address without a second request.  Every known
+    # customer is used here (Issue #458), whatever its ``created`` is.
+    customer_emails = {
+        customer_record.id: getattr(customer_record, "email", None) or ""
+        for customer_record in customers
+    }
+    # The window filters the rows of the customers file, not the lookup above.
     customers = [
         customer_record
         for customer_record in customers
         if _created_in_window(customer_record.created, cutoff, until)
     ]
-    # Issue #239: the payments CSV shows who paid.  The Customers list is
-    # already read for the customers export, so the email column reuses it:
-    # ``{customer id: email}`` maps each payment's documented ``customer`` id
-    # to that customer's address without a second request.
-    customer_emails = {
-        customer_record.id: getattr(customer_record, "email", None) or ""
-        for customer_record in customers
-    }
     rows = {
         "payments": [
             _payment_row(

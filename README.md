@@ -232,10 +232,10 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --since 2026
 `--since` 从当天 00:00:00Z（含）开始，`--until` 到当天 23:59:59Z（含）结束，
 所以两端都是整天、边界上的记录也会导出；两个参数可以只传一个，只传 `--since`
 时没有上界，只传 `--until` 时没有下界。窗口通过 Stripe 列表的 `created[gte]` /
-`created[lte]` 过滤参数下推，三个列表（PaymentIntents、Refunds、Customers）都只
-读取这一时间段的记录，所以 `payments-<日期>.csv`、`refunds-<日期>.csv`、
-`customers-<日期>.csv` 里不会出现窗口外的行，命令最后一行的计数也只数窗口内的
-记录。例如账户里有一条 2026-08-31 的付款、一条 `created` 正好是
+`created[lte]` 过滤参数下推到 PaymentIntents 和 Refunds 列表，Customers 列表按
+记录的 `created` 只留下窗口内的客户行，所以 `payments-<日期>.csv`、
+`refunds-<日期>.csv`、`customers-<日期>.csv` 里不会出现窗口外的行，命令最后一行
+的计数也只数窗口内的记录。例如账户里有一条 2026-08-31 的付款、一条 `created` 正好是
 2026-09-01T00:00:00Z 的付款、一条 `created` 正好是 2026-09-30T23:59:59Z 的退款、
 一条 2026-10-01 的付款，窗口内还有 2 个客户时，输出是：
 
@@ -244,13 +244,13 @@ exported payments=1 refunds=1 customers=2 to export/
 ```
 
 `--since` / `--until` 可以和 `--customer`、`--email`、`--format`、`--limit`、
-`--output-dir` 一起用，它们都只看到窗口内的记录；不传这两个参数时导出内容与以前
-完全一致（整个账户）。窗口同样套在 Customers 列表上，所以客户的 `created` 落在
-窗口外时不会出现在 `customers-<日期>.csv` 里，`payments-<日期>.csv` 的 `客户邮箱`
-那一格也就为空（与上面「该 customer 不在客户列表里」同一种情况）；`--email`
-搭配窗口时，如果该邮箱的客户本身创建在窗口外，命令会报
-`error: no Stripe customer has the email ...`，这时改用 `--customer cus_...`
-指定客户、把窗口只套在付款和退款上即可。
+`--output-dir` 一起用，付款、退款和 `customers-<日期>.csv` 的数据行都只覆盖窗口内
+的记录；不传这两个参数时导出内容与以前完全一致（整个账户）。窗口不限制客户查询
+（Issue #458）：`--email` 只用 `email` 条件定位客户，`payments-<日期>.csv` 的
+`客户邮箱` 列按已知的客户 id 取值，所以即使客户的 `created` 落在窗口外，
+`--email` 也照常导出窗口内的付款（这时 `customers-<日期>.csv` 没有该客户的数据行，
+末行如 `exported payments=1 refunds=0 customers=0 to export/`），
+`--customer cus_old` 搭配窗口时那一列也照常写出 `cus_old` 的邮箱，而不是整列为空。
 
 只想看最近 N×24 小时内创建的记录（例如和 `summary --days 30` 同一个窗口）时加
 `--days N`，N 必须是正整数（如 `--days 7`）；传 0、负数或非整数时命令直接报错
@@ -262,8 +262,9 @@ STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments export --days 30 --
 
 窗口从运行时刻往前推 N×24 小时，只有 `created` 落在窗口内的付款、退款和客户记录
 会被导出，恰好落在截止时刻（`created` 等于运行时刻减 N×24 小时）的记录仍算在
-窗口内。窗口通过 Stripe 列表的 `created[gte]` 过滤参数下推到 PaymentIntents、
-Refunds、Customers 三个列表，所以 `payments-<日期>.csv`、`refunds-<日期>.csv`、
+窗口内。窗口通过 Stripe 列表的 `created[gte]` 过滤参数下推到 PaymentIntents 和
+Refunds 列表，Customers 列表按记录的 `created` 只留下窗口内的客户行（客户查询本身
+不受窗口限制，见上），所以 `payments-<日期>.csv`、`refunds-<日期>.csv`、
 `customers-<日期>.csv` 里不会出现窗口外的行，命令最后一行的
 `exported payments=... refunds=... customers=...` 也只数窗口内的记录；行格式、
 文件名和列名与不加 `--days` 时完全一致。例如最近 30 天有两笔付款、一笔退款和
@@ -275,8 +276,9 @@ exported payments=2 refunds=1 customers=1 to export/
 
 `--days` 与 `--since` 一起用时下界取两者更晚的那个（与 `summary`、
 `refunds-summary` 相同），`--until` 仍到当天 23:59:59Z 结束；和 `--customer`、
-`--email`、`--format`、`--limit`、`--output-dir` 一起用时它们都只看到窗口内的
-记录。不传 `--days` 时导出内容、文件名和末行输出与以前完全一致（整个账户）。
+`--email`、`--format`、`--limit`、`--output-dir` 一起用时，付款、退款和
+`customers-<日期>.csv` 的数据行依旧只覆盖窗口内的记录（客户查询不受窗口限制，
+见上）。不传 `--days` 时导出内容、文件名和末行输出与以前完全一致（整个账户）。
 
 失败与修复：`--format` 只接受 `csv`、`json`、`both`，填别的值时命令以退出码 2
 结束并报 `argument --format: invalid choice: 'xml' (choose from 'csv', 'json',
