@@ -276,8 +276,9 @@ exported payments=2 refunds=1 customers=1 to export/
 
 `--days` 与 `--since` 一起用时下界取两者更晚的那个（与 `summary`、
 `refunds-summary` 相同），`--until` 仍到当天 23:59:59Z 结束；和 `--customer`、
-`--email`、`--format`、`--limit`、`--output-dir` 一起用时它们都只看到窗口内的
-记录。不传 `--days` 时导出内容、文件名和末行输出与以前完全一致（整个账户）。
+`--email`、`--format`、`--limit`、`--output-dir` 一起用时，付款、退款和
+`customers-<日期>.csv` 的数据行依旧只覆盖窗口内的记录（客户查询不受窗口限制，
+见上）。不传 `--days` 时导出内容、文件名和末行输出与以前完全一致（整个账户）。
 
 失败与修复：`--format` 只接受 `csv`、`json`、`both`，填别的值时命令以退出码 2
 结束并报 `argument --format: invalid choice: 'xml' (choose from 'csv', 'json',
