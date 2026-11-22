@@ -2056,3 +2056,17 @@ def test_refunds_page_lists_the_refunded_orders_only():
         "REFUNDS.md must not list the order "
         f"{UNREFUNDED_ORDER_ID}: its refund column is 0"
     )
+
+
+# Issue #515: the root GATE861.txt holds the retry value of the attached
+# settings.log, and nothing else: no key, no comment and no second setting.
+GATE861_PAGE = REPO_ROOT / "GATE861.txt"
+GATE861_RETRY_VALUE = "7"
+
+
+def test_gate861_file_holds_only_the_retry_value():
+    """Issue #515: GATE861.txt is one line with the retry value `7`."""
+    assert _read(GATE861_PAGE) == f"{GATE861_RETRY_VALUE}\n", (
+        f"GATE861.txt must hold only the retry value {GATE861_RETRY_VALUE!r} "
+        f"followed by one newline, got {_read(GATE861_PAGE)!r}"
+    )
