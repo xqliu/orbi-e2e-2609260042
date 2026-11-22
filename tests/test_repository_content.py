@@ -2070,3 +2070,19 @@ def test_gate861_file_holds_only_the_retry_value():
         f"GATE861.txt must hold only the retry value {GATE861_RETRY_VALUE!r} "
         f"followed by one newline, got {_read(GATE861_PAGE)!r}"
     )
+
+
+# Issue #517: the root GATE870.txt holds the single word `ok` and nothing
+# else, so a reader who opens it sees one line without extra text, a second
+# line or a blank line.
+GATE870_PAGE = REPO_ROOT / "GATE870.txt"
+GATE870_CONTENT = "ok"
+
+
+def test_gate870_file_holds_only_ok():
+    """Issue #517: GATE870.txt is exactly one line `ok` plus a newline."""
+    content = _read(GATE870_PAGE)
+    assert content == f"{GATE870_CONTENT}\n", (
+        f"GATE870.txt must hold only {GATE870_CONTENT!r} followed by one "
+        f"newline, got {content!r}"
+    )
