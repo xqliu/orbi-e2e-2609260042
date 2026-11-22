@@ -1998,6 +1998,40 @@ def test_checkout_page_lists_only_the_refunded_order():
     )
 
 
+# Issue #509: the root BANNER.md records the checkout error banner's colour, so
+# a reader picks the right colour without opening the screenshot.
+BANNER_PAGE = REPO_ROOT / "BANNER.md"
+BANNER_COLOUR_NAME = "深红色"
+BANNER_COLOUR_HEX = "#B01C1B"
+# The screenshot carries no design token, so the page marks the colour value as
+# an approximation a design file can replace.
+BANNER_APPROXIMATE_NOTE = "近似值"
+
+
+def test_banner_page_states_the_error_banner_colour():
+    """Issue #509: BANNER.md names the dark red colour and its hex value."""
+    paragraphs = [
+        block.strip()
+        for block in _read(BANNER_PAGE).split("\n\n")
+        if block.strip()
+    ]
+    expected = (BANNER_COLOUR_NAME, BANNER_COLOUR_HEX)
+    matches = [
+        paragraph
+        for paragraph in paragraphs
+        if all(fact in paragraph for fact in expected)
+    ]
+    assert matches, (
+        "BANNER.md needs one paragraph naming the checkout error banner colour "
+        f"{BANNER_COLOUR_NAME!r} and its hex value {BANNER_COLOUR_HEX!r}; "
+        f"got paragraphs: {paragraphs!r}"
+    )
+    assert BANNER_APPROXIMATE_NOTE in _read(BANNER_PAGE), (
+        f"BANNER.md must mark the hex value {BANNER_COLOUR_HEX!r} as an "
+        f"{BANNER_APPROXIMATE_NOTE!r}"
+    )
+
+
 # Issue #510: the root REFUNDS.md lists the order numbers that were refunded,
 # so a reader sees the refunded orders without opening the order table.  The
 # order table holds exactly one order whose `refund` column is greater than 0
