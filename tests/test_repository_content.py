@@ -1935,3 +1935,64 @@ def test_readme_usage_example_command_runs_from_the_repository_root():
         f"the {README_USAGE_HEADING!r} example must print the main script's "
         f"real output, got:\n{result.stdout}"
     )
+
+# Issue #506: the root CHECKOUT.md records the checkout page's error banner
+# (text, colour and the prototype class) and the orders that were refunded, so
+# a reader learns both facts without opening the prototype or the order table.
+CHECKOUT_PAGE = REPO_ROOT / "CHECKOUT.md"
+CHECKOUT_BANNER_TEXT = "Payment failed: invalid card"
+# The screenshot shows a dark red bar; the page describes the colour in words
+# instead of a hex code.
+CHECKOUT_BANNER_COLOURS = ("深红色", "暗红")
+CHECKOUT_BANNER_CLASS = "`error-banner`"
+CHECKOUT_REFUND_HEADING = "## 退款订单"
+# The documented order table holds exactly one order whose `refund` column is
+# greater than 0, so the refunded-order list names only that order id.
+CHECKOUT_REFUNDED_ORDER_IDS = ["1002"]
+CHECKOUT_ORDER_ID_RE = re.compile(r"`(\d{4})`")
+
+
+def _checkout_paragraphs() -> list:
+    """Return the non-empty paragraphs of CHECKOUT.md."""
+    return [
+        block.strip()
+        for block in _read(CHECKOUT_PAGE).split("\n\n")
+        if block.strip()
+    ]
+
+
+def test_checkout_page_states_the_error_banner_text_colour_and_class():
+    """Issue #506: one paragraph carries all three error-banner facts."""
+    paragraphs = _checkout_paragraphs()
+    expected = (CHECKOUT_BANNER_TEXT, CHECKOUT_BANNER_CLASS, *CHECKOUT_BANNER_COLOURS)
+    matches = [
+        paragraph
+        for paragraph in paragraphs
+        if all(fact in paragraph for fact in expected)
+    ]
+    assert matches, (
+        "CHECKOUT.md needs one paragraph naming the banner text "
+        f"{CHECKOUT_BANNER_TEXT!r}, the colour 深红色（暗红） and the prototype "
+        f"class {CHECKOUT_BANNER_CLASS!r}; got paragraphs: {paragraphs!r}"
+    )
+
+
+def test_checkout_page_lists_only_the_refunded_order():
+    """Issue #506: the refunded-order list holds only the refunded order."""
+    text = _read(CHECKOUT_PAGE)
+    assert f"\n{CHECKOUT_REFUND_HEADING}\n" in text, (
+        f"CHECKOUT.md needs a {CHECKOUT_REFUND_HEADING!r} section"
+    )
+    body = text.split(f"\n{CHECKOUT_REFUND_HEADING}\n", 1)[1]
+    bullets = [
+        line for line in body.splitlines() if line.lstrip().startswith("- ")
+    ]
+    assert bullets, (
+        f"the {CHECKOUT_REFUND_HEADING!r} section must list the refunded orders"
+    )
+    order_ids = CHECKOUT_ORDER_ID_RE.findall("\n".join(bullets))
+    assert order_ids == CHECKOUT_REFUNDED_ORDER_IDS, (
+        "the refunded-order list must name exactly the orders whose `refund` "
+        f"column is greater than 0 ({CHECKOUT_REFUNDED_ORDER_IDS}), "
+        f"got {order_ids!r}"
+    )
