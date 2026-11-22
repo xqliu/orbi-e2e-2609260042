@@ -2070,3 +2070,35 @@ def test_gate861_file_holds_only_the_retry_value():
         f"GATE861.txt must hold only the retry value {GATE861_RETRY_VALUE!r} "
         f"followed by one newline, got {_read(GATE861_PAGE)!r}"
     )
+
+
+# Issue #516: the root GATE862.txt holds the button colour of the attached
+# spec.html on line 1 and one Chinese sentence describing the main colour of
+# the attached blue.png on line 2.  It carries no HTML: no tag and no script.
+GATE862_PAGE = REPO_ROOT / "GATE862.txt"
+GATE862_BUTTON_COLOUR = "#1F7A3A"
+GATE862_BLUE_DESCRIPTION = "附图 blue.png 的主色是一种中等饱和度的蓝色。"
+
+
+def test_gate862_file_holds_the_button_colour_and_blue_png_description():
+    """Issue #516: GATE862.txt is the button colour plus one blue.png line."""
+    text = _read(GATE862_PAGE)
+    lines = text.splitlines()
+    assert len(lines) == 2, (
+        f"GATE862.txt must hold exactly two lines, got {lines!r}"
+    )
+    assert lines[0] == GATE862_BUTTON_COLOUR, (
+        f"GATE862.txt line 1 must be the spec.html button colour "
+        f"{GATE862_BUTTON_COLOUR!r}, got {lines[0]!r}"
+    )
+    assert lines[1] == GATE862_BLUE_DESCRIPTION, (
+        f"GATE862.txt line 2 must describe blue.png as "
+        f"{GATE862_BLUE_DESCRIPTION!r}, got {lines[1]!r}"
+    )
+    # The file is plain text: no HTML markup and no script of spec.html leaks in.
+    assert "<" not in text and ">" not in text, (
+        f"GATE862.txt must not carry HTML markup, got {text!r}"
+    )
+    assert "script" not in text.lower(), (
+        f"GATE862.txt must not carry the spec.html script, got {text!r}"
+    )
