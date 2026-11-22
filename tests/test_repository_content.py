@@ -2030,3 +2030,29 @@ def test_banner_page_states_the_error_banner_colour():
         f"BANNER.md must mark the hex value {BANNER_COLOUR_HEX!r} as an "
         f"{BANNER_APPROXIMATE_NOTE!r}"
     )
+
+
+# Issue #510: the root REFUNDS.md lists the order numbers that were refunded,
+# so a reader sees the refunded orders without opening the order table.  The
+# order table holds exactly one order whose `refund` column is greater than 0
+# (`1002`); the order whose refund is 0 must not be listed.
+REFUNDS_PAGE = REPO_ROOT / "REFUNDS.md"
+REFUNDS_HEADING = "# 退款订单"
+REFUNDED_ORDER_ID = "1002"
+UNREFUNDED_ORDER_ID = "1001"
+
+
+def test_refunds_page_lists_the_refunded_orders_only():
+    """Issue #510: REFUNDS.md exists and lists only orders with refund > 0."""
+    text = _read(REFUNDS_PAGE)
+    assert REFUNDS_HEADING in text, (
+        f"REFUNDS.md needs the {REFUNDS_HEADING!r} heading, got:\n{text}"
+    )
+    assert REFUNDED_ORDER_ID in text, (
+        "REFUNDS.md must list the refunded order "
+        f"{REFUNDED_ORDER_ID} (its refund column is greater than 0)"
+    )
+    assert UNREFUNDED_ORDER_ID not in text, (
+        "REFUNDS.md must not list the order "
+        f"{UNREFUNDED_ORDER_ID}: its refund column is 0"
+    )
