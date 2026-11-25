@@ -2315,3 +2315,81 @@ def test_gate862_file_holds_the_button_colour_and_blue_png_description():
     assert "script" not in text.lower(), (
         f"GATE862.txt must not carry the spec.html script, got {text!r}"
     )
+
+
+# Issue #521: the receipt page's 「下载 PDF」 button is a clickable primary button
+# — #2563EB with white text, #1D4ED8 on hover — instead of the #9CA3AF grey the
+# receipt page (and its spec) reserves for a button that cannot be clicked.
+RECEIPT_PAGE = REPO_ROOT / "docs" / "receipt.html"
+RECEIPT_BUTTON_LABEL = "下载 PDF"
+RECEIPT_PRIMARY_BACKGROUND = "#2563eb"
+RECEIPT_PRIMARY_HOVER_BACKGROUND = "#1d4ed8"
+RECEIPT_DISABLED_BACKGROUND = "#9ca3af"
+RECEIPT_WHITE_TEXT = ("#fff", "#ffffff")
+
+
+def _receipt_rule(selector: str) -> dict:
+    """Return the declarations of one CSS rule of the receipt page's style."""
+    text = _read(RECEIPT_PAGE)
+    match = re.search(
+        r"(?m)^\s*" + re.escape(selector) + r"\s*\{([^}]*)\}", text
+    )
+    assert match, (
+        f"docs/receipt.html must declare a {selector!r} rule, got:\n"
+        f"{text}"
+    )
+    declarations = {}
+    for declaration in match.group(1).split(";"):
+        if ":" in declaration:
+            prop, value = declaration.split(":", 1)
+            declarations[prop.strip().lower()] = value.strip().lower()
+    return declarations
+
+
+def _receipt_background(declarations: dict, selector: str) -> str:
+    """The background colour a rule declares, whether as shorthand or longhand."""
+    value = declarations.get(
+        "background-color", declarations.get("background", "")
+    )
+    assert value, (
+        f"the docs/receipt.html {selector!r} rule must declare a background "
+        f"colour, got {declarations!r}"
+    )
+    return value
+
+
+def test_receipt_download_button_uses_the_primary_button_colour():
+    """Issue #521: the button is #2563EB with white text, never the grey."""
+    rule = _receipt_rule(".btn")
+    background = _receipt_background(rule, ".btn")
+    assert background == RECEIPT_PRIMARY_BACKGROUND, (
+        f"the 「{RECEIPT_BUTTON_LABEL}」 button must use the primary "
+        f"background {RECEIPT_PRIMARY_BACKGROUND} (#2563EB), got {background!r}"
+    )
+    assert RECEIPT_DISABLED_BACKGROUND not in background, (
+        "the 「" + RECEIPT_BUTTON_LABEL + "」 button is clickable, so it must "
+        f"not use the unavailable-button grey {RECEIPT_DISABLED_BACKGROUND}"
+    )
+    text_colour = rule.get("color", "")
+    assert text_colour in RECEIPT_WHITE_TEXT, (
+        f"the 「{RECEIPT_BUTTON_LABEL}」 button must keep white text "
+        f"({RECEIPT_WHITE_TEXT[0]}), got {text_colour!r}"
+    )
+    # The styled class really is the button the receipt page renders, and the
+    # button keeps its existing `href="#"` behaviour.
+    page = _read(RECEIPT_PAGE)
+    assert f'class="btn" href="#">{RECEIPT_BUTTON_LABEL}</a>' in page, (
+        f"docs/receipt.html must keep rendering the class=\"btn\" anchor "
+        f"labelled {RECEIPT_BUTTON_LABEL!r} with href=\"#\""
+    )
+
+
+def test_receipt_download_button_darkens_on_hover():
+    """Issue #521: hovering the button changes its background to #1D4ED8."""
+    hover = _receipt_rule(".btn:hover")
+    background = _receipt_background(hover, ".btn:hover")
+    assert background == RECEIPT_PRIMARY_HOVER_BACKGROUND, (
+        f"the 「{RECEIPT_BUTTON_LABEL}」 button must turn "
+        f"{RECEIPT_PRIMARY_HOVER_BACKGROUND} (#1D4ED8) on hover, got "
+        f"{background!r}"
+    )
