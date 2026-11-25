@@ -2107,11 +2107,14 @@ RECEIPT_REFUND_TEXT = "-$29.00"
 RECEIPT_AMOUNT_ALIGN = "right"
 RECEIPT_TABULAR_NUMERALS = "tabular-nums"
 RECEIPT_REFUND_RED = "#dc2626"
-# The simple selector shapes this page's stylesheet uses: `tag`, `.class`
-# and `tag.class` (any number of classes).
+# The selector shapes that can match a table cell here: `tag`, `.class`,
+# `tag.class` (any number of classes) and `*`, space separated for a
+# descendant selector.  Any other shape — a pseudo-class such as
+# `.btn:hover`, an ID, an attribute selector — does not style a cell in the
+# page's static rendering, so it is skipped instead of asserted over.
 STYLE_BLOCK_RE = re.compile(r"<style[^>]*>(.*?)</style>", re.DOTALL)
 CSS_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
-SIMPLE_SELECTOR_RE = re.compile(r"^(\*|[a-z][a-z0-9]*)?((?:\.[A-Za-z0-9_-]+)*)$")
+CELL_SELECTOR_RE = re.compile(r"^(\*|[a-z][a-z0-9]*)?((?:\.[A-Za-z0-9_-]+)*)$")
 
 
 class _TableCells(HTMLParser):
@@ -2182,58 +2185,55 @@ def _style_rules(html_text):
     return rules
 
 
-def _selector_compound(compound):
-    """Split a simple compound selector into its tag and its classes."""
-    match = SIMPLE_SELECTOR_RE.match(compound)
-    assert match, f"{compound!r} is not a simple selector of this page"
-    tag, classes = match.groups()
-    tag = None if tag == "*" else tag
-    return tag, {name for name in classes.split(".") if name}
-
-
-def _matches(compound, tag, attributes):
-    """Return whether one compound selector matches one element."""
-    compound_tag, compound_classes = _selector_compound(compound)
-    classes = set(attributes.get("class", "").split())
-    return compound_tag in (None, tag) and compound_classes <= classes
+def _compound_matches(compound, tag, attributes):
+    """Match one compound selector: True, False, or None when unsupported."""
+    match = CELL_SELECTOR_RE.match(compound)
+    if match is None:
+        return None
+    compound_tag, classes = match.groups()
+    compound_tag = None if compound_tag == "*" else compound_tag
+    wanted = {name for name in classes.split(".") if name}
+    cell_classes = set(attributes.get("class", "").split())
+    return compound_tag in (None, tag) and wanted <= cell_classes
 
 
 def _selector_matches(selector, tag, attributes, ancestors):
-    """Return whether a descendant selector matches an element and its ancestors."""
-    compounds = selector.split()
-    assert compounds, f"{selector!r} is an empty selector"
-    if not _matches(compounds[-1], tag, attributes):
-        return False
-    remaining = compounds[:-1]
-    for ancestor_tag, ancestor_attributes in ancestors:
-        if remaining and _matches(
-            remaining[-1], ancestor_tag, ancestor_attributes
-        ):
-            remaining = remaining[:-1]
-    return not remaining
+    """Match a selector against a cell and its ancestors, innermost first.
+
+    A child combinator is read as a descendant one: this table nests its cells
+    directly, so both forms point at the same cells.
+    """
+    compounds = selector.replace(">", " ").split()
+    inner = _compound_matches(compounds[-1], tag, attributes)
+    if inner is not True:
+        return inner
+    ancestors = list(ancestors)
+    for compound in reversed(compounds[:-1]):
+        matched_at = None
+        for index, (ancestor_tag, ancestor_attributes) in enumerate(ancestors):
+            matched = _compound_matches(compound, ancestor_tag, ancestor_attributes)
+            if matched is None:
+                return None
+            if matched:
+                matched_at = index
+                break
+        if matched_at is None:
+            return False
+        ancestors = ancestors[matched_at + 1:]
+    return True
 
 
 def _declared(html_text, tag, attributes, ancestors=()):
-    """Return the declarations a cell really gets, honouring specificity.
+    """Return the declarations the page's stylesheet applies to a cell.
 
-    The page only uses type, class and descendant selectors, so counting the
-    classes and the tag names of the matching compounds ranks two rules the
-    way the browser does, and a later rule wins a tie.  The result is the
-    declaration map the page applies to that cell.
+    The stylesheet of this page is flat and its rules for a cell do not
+    overlap, so a later matching rule wins.  Selectors this helper does not
+    understand are skipped, never counted as a match.
     """
     applied = {}
-    ranks = {}
     for selector, declarations in _style_rules(html_text):
-        if not _selector_matches(selector, tag, attributes, ancestors):
-            continue
-        rank = 0
-        for compound in selector.split():
-            compound_tag, compound_classes = _selector_compound(compound)
-            rank += len(compound_classes) * 10 + (0 if compound_tag is None else 1)
-        for name, value in declarations.items():
-            if rank >= ranks.get(name, -1):
-                applied[name] = value
-                ranks[name] = rank
+        if _selector_matches(selector, tag, attributes, ancestors) is True:
+            applied.update(declarations)
     return applied
 
 
@@ -2264,6 +2264,15 @@ def test_receipt_amount_cells_are_right_aligned_with_tabular_numerals():
             f"point stacks with the others, got font-variant-numeric "
             f"{declared.get('font-variant-numeric')!r}"
         )
+    # The Issue restyles the 金额 column only: 项目 and 数量 keep the page's
+    # left alignment, so the amount rules must not spill onto them.
+    for row in _table_rows(html_text):
+        for tag, attributes, text, ancestors in row[:-1]:
+            declared = _declared(html_text, tag, attributes, ancestors)
+            assert declared.get("text-align") == "left", (
+                f"the non-amount cell {text!r} must keep the page's left "
+                f"alignment, got text-align {declared.get('text-align')!r}"
+            )
 
 
 def test_receipt_refund_amount_is_red_and_the_other_amounts_are_not():
