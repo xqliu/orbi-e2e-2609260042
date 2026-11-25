@@ -2402,3 +2402,22 @@ def test_receipt_download_button_darkens_on_hover():
         f"{RECEIPT_PRIMARY_HOVER_BACKGROUND} (#1D4ED8) on hover, got "
         f"{background!r}"
     )
+
+
+# Issue #525: the repository root carries a VERSION file whose entire content is
+# the single line `0.1.0`, so a person or script reading it gets the version
+# string instead of "no such file".
+VERSION_FILE = REPO_ROOT / "VERSION"
+VERSION_FILE_CONTENT = "0.1.0\n"
+
+
+def test_version_file_holds_the_repository_version():
+    """Issue #525: VERSION exists at the root and is exactly one line, 0.1.0."""
+    assert VERSION_FILE.is_file(), (
+        "VERSION must exist at the repository root (repository-relative VERSION)"
+    )
+    text = VERSION_FILE.read_text(encoding="utf-8")
+    assert text == VERSION_FILE_CONTENT, (
+        "VERSION must contain exactly the single line '0.1.0' "
+        f"(one trailing newline), got {text!r}"
+    )
