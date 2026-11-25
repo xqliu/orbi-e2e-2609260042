@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 
 import stripe_payments
@@ -2094,6 +2095,202 @@ def test_gate870_file_holds_only_ok():
 GATE862_PAGE = REPO_ROOT / "GATE862.txt"
 GATE862_BUTTON_COLOUR = "#1F7A3A"
 GATE862_BLUE_DESCRIPTION = "附图 blue.png 的主色是一种中等饱和度的蓝色。"
+
+
+# Issue #522: the receipt page follows the 「金额列」 rules of the attached
+# spec.html — the 金额 header, every row's amount (the 合计 row included) is
+# right aligned, amounts use tabular figures so the decimal points of $29.00,
+# $6.00 and -$29.00 stack, and a negative (refund) amount is red #DC2626.
+RECEIPT_PAGE = REPO_ROOT / "docs" / "receipt.html"
+RECEIPT_AMOUNT_HEADING = "金额"
+RECEIPT_REFUND_TEXT = "-$29.00"
+RECEIPT_AMOUNT_ALIGN = "right"
+RECEIPT_TABULAR_NUMERALS = "tabular-nums"
+RECEIPT_REFUND_RED = "#dc2626"
+# The simple selector shapes this page's stylesheet uses: `tag`, `.class`
+# and `tag.class` (any number of classes).
+STYLE_BLOCK_RE = re.compile(r"<style[^>]*>(.*?)</style>", re.DOTALL)
+CSS_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+SIMPLE_SELECTOR_RE = re.compile(r"^(\*|[a-z][a-z0-9]*)?((?:\.[A-Za-z0-9_-]+)*)$")
+
+
+class _TableCells(HTMLParser):
+    """Collect the page's table cells with the ancestors each one sits in."""
+
+    # Only the elements that can wrap a table cell need an open scope.
+    SCOPE_TAGS = ("table", "thead", "tbody", "tfoot", "tr", "td", "th")
+
+    def __init__(self):
+        super().__init__()
+        self.rows = []
+        self._row = None
+        self._cell = None
+        self._text = []
+        self._open = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "tr":
+            self._row = []
+        elif tag in ("th", "td") and self._row is not None:
+            self._cell = dict(attrs)
+            self._text = []
+        if tag in self.SCOPE_TAGS:
+            self._open.append((tag, dict(attrs)))
+
+    def handle_endtag(self, tag):
+        if tag in ("th", "td") and self._cell is not None:
+            ancestors = tuple(reversed(self._open[:-1]))
+            self._row.append(
+                (tag, self._cell, "".join(self._text).strip(), ancestors)
+            )
+            self._cell = None
+        elif tag == "tr" and self._row is not None:
+            self.rows.append(self._row)
+            self._row = None
+        while self._open and self._open[-1][0] != tag:
+            self._open.pop()
+        if self._open:
+            self._open.pop()
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._text.append(data)
+
+
+def _table_rows(html_text):
+    """Return the page's table rows, one list of cells per row."""
+    parser = _TableCells()
+    parser.feed(html_text)
+    parser.close()
+    return parser.rows
+
+
+def _style_rules(html_text):
+    """Return the page's `(selector, declarations)` rules in source order."""
+    css = "".join(STYLE_BLOCK_RE.findall(html_text))
+    css = CSS_COMMENT_RE.sub("", css)
+    rules = []
+    for selectors, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
+        declarations = {}
+        for declaration in body.split(";"):
+            if ":" not in declaration:
+                continue
+            name, value = declaration.split(":", 1)
+            declarations[name.strip().lower()] = value.strip()
+        for selector in selectors.split(","):
+            rules.append((selector.strip(), declarations))
+    return rules
+
+
+def _selector_compound(compound):
+    """Split a simple compound selector into its tag and its classes."""
+    match = SIMPLE_SELECTOR_RE.match(compound)
+    assert match, f"{compound!r} is not a simple selector of this page"
+    tag, classes = match.groups()
+    tag = None if tag == "*" else tag
+    return tag, {name for name in classes.split(".") if name}
+
+
+def _matches(compound, tag, attributes):
+    """Return whether one compound selector matches one element."""
+    compound_tag, compound_classes = _selector_compound(compound)
+    classes = set(attributes.get("class", "").split())
+    return compound_tag in (None, tag) and compound_classes <= classes
+
+
+def _selector_matches(selector, tag, attributes, ancestors):
+    """Return whether a descendant selector matches an element and its ancestors."""
+    compounds = selector.split()
+    assert compounds, f"{selector!r} is an empty selector"
+    if not _matches(compounds[-1], tag, attributes):
+        return False
+    remaining = compounds[:-1]
+    for ancestor_tag, ancestor_attributes in ancestors:
+        if remaining and _matches(
+            remaining[-1], ancestor_tag, ancestor_attributes
+        ):
+            remaining = remaining[:-1]
+    return not remaining
+
+
+def _declared(html_text, tag, attributes, ancestors=()):
+    """Return the declarations a cell really gets, honouring specificity.
+
+    The page only uses type, class and descendant selectors, so counting the
+    classes and the tag names of the matching compounds ranks two rules the
+    way the browser does, and a later rule wins a tie.  The result is the
+    declaration map the page applies to that cell.
+    """
+    applied = {}
+    ranks = {}
+    for selector, declarations in _style_rules(html_text):
+        if not _selector_matches(selector, tag, attributes, ancestors):
+            continue
+        rank = 0
+        for compound in selector.split():
+            compound_tag, compound_classes = _selector_compound(compound)
+            rank += len(compound_classes) * 10 + (0 if compound_tag is None else 1)
+        for name, value in declarations.items():
+            if rank >= ranks.get(name, -1):
+                applied[name] = value
+                ranks[name] = rank
+    return applied
+
+
+def _receipt_amount_cells():
+    """Return the 金额 cells of docs/receipt.html: the header, rows, total."""
+    rows = _table_rows(_read(RECEIPT_PAGE))
+    assert rows, "docs/receipt.html must hold the receipt table"
+    header, body = rows[0], rows[1:]
+    assert header[-1][2] == RECEIPT_AMOUNT_HEADING, (
+        f"the last column header must be {RECEIPT_AMOUNT_HEADING!r}, "
+        f"got {header[-1][2]!r}"
+    )
+    assert body, "the receipt table must hold the amount rows"
+    return [header[-1]] + [row[-1] for row in body]
+
+
+def test_receipt_amount_cells_are_right_aligned_with_tabular_numerals():
+    """Issue #522: every 金额 cell ends on one right edge, in tabular figures."""
+    html_text = _read(RECEIPT_PAGE)
+    for tag, attributes, text, ancestors in _receipt_amount_cells():
+        declared = _declared(html_text, tag, attributes, ancestors)
+        assert declared.get("text-align") == RECEIPT_AMOUNT_ALIGN, (
+            f"the amount cell {text!r} must be right aligned, "
+            f"got text-align {declared.get('text-align')!r}"
+        )
+        assert declared.get("font-variant-numeric") == RECEIPT_TABULAR_NUMERALS, (
+            f"the amount cell {text!r} must use tabular figures so its decimal "
+            f"point stacks with the others, got font-variant-numeric "
+            f"{declared.get('font-variant-numeric')!r}"
+        )
+
+
+def test_receipt_refund_amount_is_red_and_the_other_amounts_are_not():
+    """Issue #522: -$29.00 is red #DC2626, every other amount keeps its colour."""
+    html_text = _read(RECEIPT_PAGE)
+    cells = _receipt_amount_cells()
+    refunds = [cell for cell in cells if cell[2] == RECEIPT_REFUND_TEXT]
+    assert len(refunds) == 1, (
+        f"docs/receipt.html must hold one refund amount "
+        f"{RECEIPT_REFUND_TEXT!r}, got {len(refunds)}"
+    )
+    for tag, attributes, text, ancestors in cells:
+        colour = (
+            _declared(html_text, tag, attributes, ancestors)
+            .get("color", "")
+            .lower()
+        )
+        if text == RECEIPT_REFUND_TEXT:
+            assert colour == RECEIPT_REFUND_RED, (
+                f"the refund amount {text!r} must be {RECEIPT_REFUND_RED}, "
+                f"got {colour or 'no declared colour'!r}"
+            )
+        else:
+            assert colour != RECEIPT_REFUND_RED, (
+                f"the positive amount {text!r} must keep the default colour, "
+                f"got the refund red {colour!r}"
+            )
 
 
 def test_gate862_file_holds_the_button_colour_and_blue_png_description():
