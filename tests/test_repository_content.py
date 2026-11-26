@@ -2464,3 +2464,22 @@ def test_version_file_holds_the_repository_version():
         "VERSION must contain exactly the single line '0.1.0' "
         f"(one trailing newline), got {text!r}"
     )
+
+# Issue #530: the repository root carries BASE0877.txt whose entire content is
+# the single line `ok`, so a reader or script opening it gets that word instead
+# of "no such file".
+BASE0877_FILE = REPO_ROOT / "BASE0877.txt"
+BASE0877_CONTENT = "ok\n"
+
+
+def test_base0877_file_holds_only_ok():
+    """Issue #530: BASE0877.txt exists at the root and is exactly one line, ok."""
+    assert BASE0877_FILE.is_file(), (
+        "BASE0877.txt must exist at the repository root "
+        "(repository-relative BASE0877.txt)"
+    )
+    text = BASE0877_FILE.read_text(encoding="utf-8")
+    assert text == BASE0877_CONTENT, (
+        "BASE0877.txt must contain exactly the single line 'ok' "
+        f"(one trailing newline), got {text!r}"
+    )
