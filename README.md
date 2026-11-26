@@ -990,3 +990,13 @@ Prerequisite rows are tested on beta.
 ## Changelog
 
 - 2026-11-21: C4 label check.
+
+## 常见问题
+
+Q：运行要什么 Python 版本？
+
+A：3.10 及以上。
+
+Q：输出写到哪里？
+
+A：默认写到 out/ 目录。
