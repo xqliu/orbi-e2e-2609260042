@@ -200,6 +200,14 @@ README_QUICK_START_LOCATION = "仓库根目录"
 README_FAQ_HEADING = "## 常见问题"
 README_FAQ_EXPORT_QUESTION = "Q：导出的文件在哪里"
 
+# Issue #527 appends one more 「常见问题」 section at the very end of the README,
+# written as the screenshot shows: the Python version and the default output
+# directory, one `Q：`/`A：` pair per answer.
+README_FAQ_PYTHON_QUESTION = "Q：运行要什么 Python 版本？"
+README_FAQ_PYTHON_ANSWER = "A：3.10 及以上。"
+README_FAQ_OUTPUT_QUESTION = "Q：输出写到哪里？"
+README_FAQ_OUTPUT_ANSWER = "A：默认写到 out/ 目录。"
+
 # The `功能建议` template is offered by its Chinese `name` and promises its
 # author the two sections the request asked for.
 FEATURE_REQUEST_NAME = "功能建议"
@@ -475,14 +483,19 @@ def test_readme_states_the_test_command_up_front():
     )
 
 
-def test_readme_ends_with_the_beta_acceptance_note():
-    """Issue #455: the README ends with the changelog line."""
+def test_readme_ends_with_the_faq_answer_and_keeps_the_notes():
+    """Issue #527: the README ends with the appended FAQ answer."""
     lines = [line for line in _read(README).splitlines() if line.strip()]
-    assert lines[-1] == README_LAST_LINE, (
-        f"the README must end with the {README_LAST_LINE!r} line, "
+    assert lines[-1] == README_FAQ_OUTPUT_ANSWER, (
+        f"the README must end with the {README_FAQ_OUTPUT_ANSWER!r} line, "
         f"got {lines[-1]!r}"
     )
-    # Issue #26's test command note stays in the README, right above the new
+    # Issue #455's changelog line stays in the README, right above the new
+    # FAQ section, so appending the section does not drop it.
+    assert README_LAST_LINE in lines, (
+        f"the README must still carry the {README_LAST_LINE!r} line"
+    )
+    # Issue #26's test command note stays in the README, right above the
     # changelog section, so appending it does not drop the line.
     assert README_TEST_COMMAND_LINE in lines, (
         f"the README must still carry the {README_TEST_COMMAND_LINE!r} line"
@@ -1895,20 +1908,50 @@ def test_readme_has_a_usage_section_with_one_example_command():
         )
 
 
-def test_readme_ends_with_a_changelog_section_holding_the_c4_line():
-    """Issue #455: the README closes with a `## Changelog` section."""
+def test_readme_has_a_changelog_section_holding_the_c4_line():
+    """Issue #455: the README keeps a `## Changelog` section."""
     body = _readme_section(README_CHANGELOG_HEADING)
     lines = [line for line in body.splitlines() if line.strip()]
     assert lines == [README_LAST_LINE], (
         f"the {README_CHANGELOG_HEADING!r} section must hold exactly the "
         f"{README_LAST_LINE!r} line, got {lines!r}"
     )
-    # The section is the README's last `## ` section, so the changelog sits
-    # at the end of the rendered page instead of inside another section.
+    # Issue #527 appends the FAQ section after the changelog, so the changelog
+    # stays its own `## ` section right before the new one.
+    text = _read(README)
+    assert f"{README_CHANGELOG_HEADING}\n\n{README_LAST_LINE}\n\n" in text, (
+        f"the {README_CHANGELOG_HEADING!r} section must keep the "
+        f"{README_LAST_LINE!r} line"
+    )
+
+
+def test_readme_ends_with_the_issue_527_faq_section():
+    """Issue #527: the README closes with a 「常见问题」 section from the mockup."""
+    expected = "\n".join(
+        (
+            README_FAQ_HEADING,
+            "",
+            README_FAQ_PYTHON_QUESTION,
+            "",
+            README_FAQ_PYTHON_ANSWER,
+            "",
+            README_FAQ_OUTPUT_QUESTION,
+            "",
+            README_FAQ_OUTPUT_ANSWER,
+        )
+    )
     text = _read(README).rstrip("\n")
-    assert text.endswith(f"{README_CHANGELOG_HEADING}\n\n{README_LAST_LINE}"), (
-        f"the README must end with the {README_CHANGELOG_HEADING!r} section, "
-        "after every other section"
+    assert text.endswith(f"\n{expected}"), (
+        f"the README must end with the appended {README_FAQ_HEADING!r} section, "
+        f"got {text[-len(expected):]!r}"
+    )
+    # The section is one `## ` block with exactly the two `Q：` questions and
+    # their `A：` answers, so the reader sees the mockup's content unchanged.
+    lines = [line for line in expected.splitlines() if line.strip()]
+    tail = text.rsplit(f"\n{README_FAQ_HEADING}\n", 1)[-1]
+    assert [line for line in tail.splitlines() if line.strip()] == lines[1:], (
+        "the appended FAQ section must hold exactly the two question/answer "
+        f"pairs, got {[line for line in tail.splitlines() if line.strip()]!r}"
     )
 
 
