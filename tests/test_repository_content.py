@@ -2483,3 +2483,21 @@ def test_base0877c_file_holds_only_ok():
         f"BASE0877C.txt must hold only {BASE0877C_CONTENT!r} followed by one "
         f"newline, got {text!r}"
     )
+
+# Issue #536: the repository root carries INFLIGHT0877.txt whose entire content
+# is the single line `ok`, so a reader who opens it sees one line without extra
+# text, a second line or a blank line.
+INFLIGHT0877_FILE = REPO_ROOT / "INFLIGHT0877.txt"
+INFLIGHT0877_CONTENT = "ok"
+
+
+def test_inflight0877_file_holds_only_ok():
+    """Issue #536: INFLIGHT0877.txt exists at the root and is one line, ok."""
+    assert INFLIGHT0877_FILE.is_file(), (
+        "INFLIGHT0877.txt must exist at the repository root"
+    )
+    text = INFLIGHT0877_FILE.read_text(encoding="utf-8")
+    assert text == f"{INFLIGHT0877_CONTENT}\n", (
+        f"INFLIGHT0877.txt must hold only {INFLIGHT0877_CONTENT!r} followed by "
+        f"one newline, got {text!r}"
+    )
