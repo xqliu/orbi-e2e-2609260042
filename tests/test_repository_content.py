@@ -2483,3 +2483,22 @@ def test_base0877c_file_holds_only_ok():
         f"BASE0877C.txt must hold only {BASE0877C_CONTENT!r} followed by one "
         f"newline, got {text!r}"
     )
+
+
+# Issue #538: the repository root carries ENGINE0770.txt whose entire content is
+# the single line `ok`, so a reader who opens it sees one line without extra
+# text, a second line or a blank line.
+ENGINE0770_FILE = REPO_ROOT / "ENGINE0770.txt"
+ENGINE0770_CONTENT = "ok"
+
+
+def test_engine0770_file_holds_only_ok():
+    """Issue #538: ENGINE0770.txt exists at the root and is exactly one line, ok."""
+    assert ENGINE0770_FILE.is_file(), (
+        "ENGINE0770.txt must exist at the repository root"
+    )
+    text = ENGINE0770_FILE.read_text(encoding="utf-8")
+    assert text == f"{ENGINE0770_CONTENT}\n", (
+        f"ENGINE0770.txt must hold only {ENGINE0770_CONTENT!r} followed by one "
+        f"newline, got {text!r}"
+    )
