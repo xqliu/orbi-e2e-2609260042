@@ -91,6 +91,21 @@ README_REFUND_SUMMARY_COMMIT = "809bb78399a49e062e7564c024e83c70a6b75834"
 # Issue #254: the top-level `--version` flag and the line it prints.
 STRIPE_VERSION_COMMAND = "python -m stripe_payments --version"
 README_VERSION_HEADING = "### 查看版本（--version）"
+# Issue #548: the README documents how to run `verify` directly, with its
+# preconditions, the copy-paste command and the failure repair.
+README_STRIPE_SECTION_HEADING = "## Stripe 付款（live 验证）"
+README_VERIFY_HEADING = "### 真实验证付款（verify）"
+# The options the `verify` subparser defines (every `--flag` in the documented
+# commands must be one of them, so the docs cannot drift from the CLI).
+VERIFY_OPTIONS = (
+    "--payment-method",
+    "--amount",
+    "--currency",
+    "--customer",
+    "--idempotency-key",
+)
+# The line the real `verify` run prints when the payment succeeded.
+VERIFY_SUCCESS_SAMPLE_LINE = "payment_intent id=pi_... status=succeeded"
 # The sample data the README section describes: ISO 第 40 周一笔 usd 0.50，第 44 周
 # 一笔 eur 1.00 加两笔 usd 1.00、2.50。The expected lines are rendered through the
 # real `_refund_week_line()` below, so the docs cannot drift from the output.
@@ -265,6 +280,15 @@ def _readme_export_command_lines() -> list:
         line
         for line in _read(README).splitlines()
         if STRIPE_EXPORT_COMMAND in line
+    ]
+
+
+def _readme_verify_command_lines() -> list:
+    """Return the README lines that run the verify command."""
+    return [
+        line
+        for line in _read(README).splitlines()
+        if STRIPE_VERIFY_COMMAND in line
     ]
 
 
@@ -612,6 +636,115 @@ def test_ci_stripe_verify_flags_are_defined_by_the_verify_subparser():
     assert not missing, (
         f"CI passes {missing} to {STRIPE_VERIFY_COMMAND!r}, but the verify "
         f"subparser only defines {sorted(option_strings)}"
+    )
+
+
+def test_readme_documents_the_verify_usage_before_the_export_subsection():
+    """Issue #548: the verify usage sits inside the live Stripe section."""
+    text = _read(README)
+    headings = (
+        README_STRIPE_SECTION_HEADING,
+        README_VERIFY_HEADING,
+        README_EXPORT_HEADING,
+    )
+    for heading in headings:
+        assert f"\n{heading}\n" in text, (
+            f"the README needs a {heading!r} section"
+        )
+    positions = [
+        text.index(f"\n{heading}\n") for heading in headings
+    ]
+    assert positions == sorted(positions), (
+        f"the README must document {', '.join(headings)} in that order"
+    )
+
+
+def test_readme_documents_the_verify_command_and_every_option():
+    """Issue #548: a copy-paste verify command, every option explained."""
+    body = _readme_subsection(README_VERIFY_HEADING)
+    assert STRIPE_VERIFY_COMMAND in body, (
+        f"the {README_VERIFY_HEADING!r} section must show how to run "
+        f"{STRIPE_VERIFY_COMMAND!r} directly"
+    )
+    for option in VERIFY_OPTIONS:
+        assert option in body, (
+            f"the {README_VERIFY_HEADING!r} section must explain {option!r}"
+        )
+    # Every flag the README passes to the verify command must be a real flag of
+    # the verify subparser, so the documented command really runs.
+    flags = {
+        flag for line in _readme_verify_command_lines()
+        for flag in STRIPE_FLAG_RE.findall(line)
+    }
+    missing_flags = flags - _verify_subparser_option_strings()
+    assert not missing_flags, (
+        f"the README passes {sorted(missing_flags)} to "
+        f"{STRIPE_VERIFY_COMMAND!r}, but the verify subparser does not define "
+        "them"
+    )
+
+
+def test_readme_documents_the_verify_preconditions():
+    """Issue #548: the live key, the pre-created pm_/cus_ and the unit."""
+    body = _readme_subsection(README_VERIFY_HEADING)
+    assert stripe_payments.LIVE_SECRET_KEY_ENV in body, (
+        f"the {README_VERIFY_HEADING!r} section must name "
+        f"{stripe_payments.LIVE_SECRET_KEY_ENV!r}"
+    )
+    assert stripe_payments.LIVE_SECRET_KEY_PREFIX in body, (
+        f"the {README_VERIFY_HEADING!r} section must say the key is a live key "
+        f"({stripe_payments.LIVE_SECRET_KEY_PREFIX}...)"
+    )
+    assert "pm_" in body, (
+        f"the {README_VERIFY_HEADING!r} section must say a pm_... payment "
+        "method is created in Stripe first"
+    )
+    assert "cus_" in body, (
+        f"the {README_VERIFY_HEADING!r} section must say a cus_... id is "
+        "needed for an attached payment method"
+    )
+    assert "最小货币单位" in body, (
+        f"the {README_VERIFY_HEADING!r} section must say the amount is in the "
+        "smallest currency unit"
+    )
+    assert (
+        f"默认 {stripe_payments.DEFAULT_AMOUNT} = "
+        f"{stripe_payments.DEFAULT_AMOUNT / 100:.2f} USD"
+    ) in body, (
+        f"the {README_VERIFY_HEADING!r} section must give the default amount "
+        f"{stripe_payments.DEFAULT_AMOUNT} = "
+        f"{stripe_payments.DEFAULT_AMOUNT / 100:.2f} USD"
+    )
+
+
+def test_readme_documents_the_verify_success_line_and_failure_repair():
+    """Issue #548: the printed success line, exit 0 and the live-key repair."""
+    body = _readme_subsection(README_VERIFY_HEADING)
+    assert VERIFY_SUCCESS_SAMPLE_LINE in body, (
+        f"the {README_VERIFY_HEADING!r} section must show "
+        f"{VERIFY_SUCCESS_SAMPLE_LINE!r}"
+    )
+    assert "退出码 0" in body, (
+        f"the {README_VERIFY_HEADING!r} section must say a succeeded payment "
+        "exits 0"
+    )
+    assert "失败与修复" in body, (
+        f"the {README_VERIFY_HEADING!r} section must repair failures the way "
+        "the other sections do"
+    )
+    assert "退出码 2" in body, (
+        f"the {README_VERIFY_HEADING!r} section must say a missing or non-live "
+        "key exits 2"
+    )
+    # The documented error line is the one the real `live_secret_key()` raises,
+    # so the repair text cannot drift from the command's output.
+    assert "is not set" in body, (
+        f"the {README_VERIFY_HEADING!r} section must quote the missing-key "
+        "error"
+    )
+    assert "must be a live Stripe secret key" in body, (
+        f"the {README_VERIFY_HEADING!r} section must quote the non-live-key "
+        "error"
     )
 
 
