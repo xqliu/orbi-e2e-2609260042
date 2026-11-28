@@ -173,6 +173,48 @@ If `pytest` or `stripe` is not installed, `python -m pytest` fails with
    密钥失效时日志报出 Stripe 的 `HTTP 401`。补上或轮换环境 secret、重新发起运行
    并批准即可，不需要改代码。
 
+### 真实验证付款（verify）
+
+`verify` 用 live 密钥对预先建好的支付方式扣一次款，确认 live 密钥和支付方式真的能
+收款；它不打开浏览器，成功与否只看终端打出的那一行。前置条件（都要在运行前准备好）：
+
+- 环境变量 `STRIPE_LIVE_SECRET_KEY` 必须是 live 密钥 `sk_live_...`；密钥不入库、
+  也不走命令行参数，只从环境变量读取。缺失或不是 live 密钥时命令直接报错，不会
+  扣款。
+- 在 Stripe 里预先创建好支付方式 `pm_...`（卡号不进 CI、不落盘）。
+- 如果这个支付方式挂在某个 Customer 下，再记下它的 `cus_...`：Stripe 要求这时
+  同时提供 customer id。
+- 金额以 Stripe 的最小货币单位计（默认 50 = 0.50 USD）。
+
+在仓库根目录照抄下面这一条（把占位符换成你自己的值）：
+
+```sh
+STRIPE_LIVE_SECRET_KEY=sk_live_... python -m stripe_payments verify --payment-method pm_... --customer cus_... --amount 50 --currency usd --idempotency-key <run id>
+```
+
+每个选项一句：
+
+- `--payment-method pm_...`：必填，要扣款的支付方式。
+- `--amount 50`：金额，以最小货币单位计，默认 50（= 0.50 USD）。
+- `--currency usd`：币种，默认 `usd`。
+- `--customer cus_...`：支付方式挂在 Customer 下时才需要，没挂可以不传。
+- `--idempotency-key <run id>`：Stripe 的幂等键；用同一个值重跑会复用第一笔
+  `pi_...`，而不是再扣一次款，所以重试时请沿用同一个 id。
+
+成功时终端打出下面这一行，退出码 0：
+
+```
+payment_intent id=pi_... status=succeeded
+```
+
+失败与修复：`STRIPE_LIVE_SECRET_KEY` 缺失时命令以退出码 2 结束并报
+`error: STRIPE_LIVE_SECRET_KEY is not set. Add your Stripe live secret key as an
+environment secret of the protected 'stripe-live' GitHub Actions environment, then
+re-run and approve the workflow.`；密钥不是 `sk_live_...` 开头时同样以退出码 2
+结束并报 `error: STRIPE_LIVE_SECRET_KEY must be a live Stripe secret key
+(sk_live_...); refusing to charge with a non-live key.`。两种情况都在发出任何 Stripe
+请求之前失败、不会扣款；补上环境变量或换成 live 密钥后重跑即可。
+
 ### 导出付款数据（export）
 
 `export` 子命令把账户的 PaymentIntents、Refunds、Customers 写成文件；`--format`
