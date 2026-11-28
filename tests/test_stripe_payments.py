@@ -3013,6 +3013,33 @@ def test_summary_days_rejects_a_non_positive_window(
     assert stripe_api.requests == []
 
 
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_summary_days_rejects_a_non_positive_window_without_csv_file(
+    live_key, stripe_api, export_date, tmp_path, value, capsys
+):
+    """Acceptance: bad --days exits 2 and writes no summary CSV file."""
+    output_dir = tmp_path / "export"
+
+    exit_code = stripe_payments.main(
+        [
+            "summary",
+            "--days",
+            value,
+            "--csv",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert captured.err.startswith("error: ")
+    assert f"--days must be positive, got {value}" in captured.err
+    assert captured.out == ""
+    assert stripe_api.requests == []
+    assert not output_dir.exists()
+
+
 def test_summary_help_describes_the_days_option(capsys):
     with pytest.raises(SystemExit) as excinfo:
         stripe_payments.main(["summary", "--help"])
