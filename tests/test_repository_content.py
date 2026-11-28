@@ -2635,3 +2635,22 @@ def test_engine0770_file_holds_only_ok():
         f"ENGINE0770.txt must hold only {ENGINE0770_CONTENT!r} followed by one "
         f"newline, got {text!r}"
     )
+
+
+# Issue #550: the repository root carries GATE0881.txt whose entire content is
+# the single line `ok`, so a reader who opens it sees one line without extra
+# text, a second line or a blank line.
+GATE0881_FILE = REPO_ROOT / "GATE0881.txt"
+GATE0881_CONTENT = "ok"
+
+
+def test_gate0881_file_holds_only_ok():
+    """Issue #550: GATE0881.txt exists at the root and is exactly one line, ok."""
+    assert GATE0881_FILE.is_file(), (
+        "GATE0881.txt must exist at the repository root"
+    )
+    text = GATE0881_FILE.read_text(encoding="utf-8")
+    assert text == f"{GATE0881_CONTENT}\n", (
+        f"GATE0881.txt must hold only {GATE0881_CONTENT!r} followed by one "
+        f"newline, got {text!r}"
+    )
